@@ -1,7 +1,7 @@
 ## Phase 3: Data Model & Firestore Schema
 ### Checklist
-[ ] Create a Firestore database in the Firebase console.  
-[ ] Define collections for users, videos, and interactions based on your ER diagram.  
+[x] Create a Firestore database in the Firebase console.  
+[x] Define collections for users, videos, and interactions based on your ER diagram.  
 [ ] Add simple rules (e.g., read/write only if authenticated).  
 [ ] Sketch out Swift data models (structs/classes) for user, video, and interaction using the ER Diagram below.
 

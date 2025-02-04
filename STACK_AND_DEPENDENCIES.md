@@ -10,9 +10,8 @@ This project uses Swift Package Manager (SPM) integrated within Xcode for depend
 ## Current Dependencies
 - Firebase iOS SDK (via SPM)
   - FirebaseAuth
-  - FirebaseFirestore
+  - FirebaseFirestore (includes Swift extensions, formerly FirebaseFirestoreSwift)
   - FirebaseStorage
-  - FirebaseFirestoreSwift
 
 ## Updating Dependencies
 - Use Xcode's Package Dependencies tab in the project navigator

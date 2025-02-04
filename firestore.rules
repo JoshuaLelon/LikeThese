@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Common functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
+    }
+    
+    // Videos collection
+    match /videos/{videoId} {
+      allow read: if isAuthenticated();
+      // Only allow admin to write videos (we'll handle this through Firebase Admin SDK)
+      allow write: if false;
+    }
+    
+    // Interactions collection
+    match /interactions/{interactionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false; // Interactions are immutable
+    }
+  }
+} 

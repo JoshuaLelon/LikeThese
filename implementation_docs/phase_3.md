@@ -2,8 +2,13 @@
 ### Checklist
 [x] Create a Firestore database in the Firebase console.  
 [x] Define collections for users, videos, and interactions based on your ER diagram.  
-[ ] Add simple rules (e.g., read/write only if authenticated).  
-[ ] Sketch out Swift data models (structs/classes) for user, video, and interaction using the ER Diagram below.
+[x] Add simple rules (e.g., read/write only if authenticated).  
+[x] Sketch out Swift data models (structs/classes) for user, video, and interaction using the ER Diagram (@ER_DIAGRAM.md)
+
+### Warnings
+- The interaction models are quite complex with multiple types. Make sure to test each type thoroughly in phase 4 when seeding data.
+- Consider adding validation logic to ensure interaction types are used correctly.
+- Consider adding documentation for each interaction type to help other developers understand when to use each one.
 
 ### File Structure Tree once implemented
 LikeThese/

@@ -1,8 +1,13 @@
 ## Phase 4: Seeding the Database
 ### Checklist
-[ ] Create a small script or function that writes sample user documents and video documents to Firestore.  
+[PROGRESS] Create a small script or function that uploads sample videos and images (as video thumbnails) to Firestore.  
 [ ] Test retrieval of sample data in the app.  
 [ ] Confirm data seeds appear in the Firestore console.  
+
+### Warnings
+- Note that the video files referenced in the seed data don't exist yet. We'll need actual video files to test with.
+- The seeding process requires authentication. Make sure to be logged in before running it.
+- All interactions are created for the first test user only.
 
 ### File Structure Tree once implemented
 LikeThese/

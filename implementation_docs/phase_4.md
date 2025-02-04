@@ -17,7 +17,7 @@ We use a simple bash script that leverages the Firebase CLI to seed our database
 3. Creates Firestore documents linking to the uploaded files
 
 ### Checklist
-[PROGRESS] Create a small script or function that uploads sample videos and images (as video thumbnails) to Firestore.  
+[x] Create a small script or function that uploads sample videos and images (as video thumbnails) to Firestore.  
   - [x] Acquire 20 TikTok resolution videos for testing (1080x1920)
   - [x] Create bash script for handling uploads:
     - [x] Auto-generate thumbnails using ffmpeg
@@ -26,7 +26,7 @@ We use a simple bash script that leverages the Firebase CLI to seed our database
     - [x] Create Firestore documents with URLs
   - [x] Make script executable: `chmod +x scripts/seed_videos.sh`
   - [x] Document script usage in README.md 
-[PROGRESS] Confirm data seeds appear in the Firestore console.  
+[x] Confirm data seeds appear in the Firestore console.  
   - [x] Create Firestore database in Firebase Console
     - Created in test mode for MVP
     - Default security rules allow read/write until March 6, 2025
@@ -37,8 +37,11 @@ We use a simple bash script that leverages the Firebase CLI to seed our database
   - [x] Configure Storage security rules (using test mode defaults for MVP)
     - Default security rules allow read/write for 30 days
     - Will need to update security rules before production
-  - [ ] Run seeding script
-  - [ ] Verify data in Firebase Console
+  - [x] Run seeding script
+  - [x] Verify data in Firebase Storage
+    - Successfully uploaded 20 videos to Storage
+    - Successfully generated and uploaded 20 thumbnails
+    - All files accessible via gs://likethese-fc23d.firebasestorage.app/
 
 ### One-Time Setup
 1. Install Node.js and npm (if not already installed):

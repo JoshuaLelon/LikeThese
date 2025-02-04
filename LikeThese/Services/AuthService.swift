@@ -1,18 +1,18 @@
 import FirebaseAuth
 import FirebaseFirestore
 
-enum AuthError: Error {
+public enum AuthError: Error {
     case signUpFailed(String)
     case signInFailed(String)
     case signOutFailed(String)
 }
 
 @MainActor
-class AuthService: ObservableObject {
-    @Published var currentUser: User?
-    @Published var isAuthenticated = false
+public class AuthService: ObservableObject {
+    @Published public var currentUser: User?
+    @Published public var isAuthenticated = false
     
-    init() {
+    public init() {
         currentUser = Auth.auth().currentUser
         isAuthenticated = currentUser != nil
         
@@ -23,7 +23,7 @@ class AuthService: ObservableObject {
         }
     }
     
-    func signUp(email: String, password: String) async throws {
+    public func signUp(email: String, password: String) async throws {
         do {
             let result = try await Auth.auth().createUser(withEmail: email, password: password)
             currentUser = result.user
@@ -39,7 +39,7 @@ class AuthService: ObservableObject {
         }
     }
     
-    func signIn(email: String, password: String) async throws {
+    public func signIn(email: String, password: String) async throws {
         do {
             let result = try await Auth.auth().signIn(withEmail: email, password: password)
             currentUser = result.user
@@ -49,7 +49,7 @@ class AuthService: ObservableObject {
         }
     }
     
-    func signOut() throws {
+    public func signOut() throws {
         do {
             try Auth.auth().signOut()
             currentUser = nil

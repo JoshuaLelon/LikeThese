@@ -1,8 +1,6 @@
 import SwiftUI
 import FirebaseAuth
-
-// Import AuthService
-@_exported import class LikeThese.AuthService
+import FirebaseFirestore
 
 struct SignUpView: View {
     @StateObject private var authService = AuthService()

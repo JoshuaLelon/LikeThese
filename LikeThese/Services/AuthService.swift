@@ -11,15 +11,23 @@ public enum AuthError: Error {
 public class AuthService: ObservableObject {
     @Published public var currentUser: User?
     @Published public var isAuthenticated = false
+    private var handle: AuthStateDidChangeListenerHandle?
     
     public init() {
         currentUser = Auth.auth().currentUser
         isAuthenticated = currentUser != nil
         
-        // Set up auth state listener
-        Auth.auth().addStateDidChangeListener { [weak self] _, user in
+        // Store the handle so we can remove the listener later if needed
+        handle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             self?.currentUser = user
             self?.isAuthenticated = user != nil
+        }
+    }
+    
+    deinit {
+        // Remove the listener when the service is deallocated
+        if let handle = handle {
+            Auth.auth().removeStateDidChangeListener(handle)
         }
     }
     

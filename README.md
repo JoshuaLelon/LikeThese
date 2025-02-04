@@ -1,5 +1,25 @@
 # LikeThese
 
+## Development
+
+### Building & Running
+To build and run the app during development:
+
+1. Using SweetPad UI:
+   - Click the "Clean" option in the schema context menu
+   - Click the "Build & Run" button (▶️)
+
+2. Using Terminal:
+   ```bash
+   sweetpad clean && sweetpad build && sweetpad launch
+   ```
+
+### Prerequisites
+- Xcode 15.0 or later
+- iOS 17.0 or later
+- SweetPad extension for VS Code/Cursor
+- Firebase project with Storage enabled
+
 ## Scripts
 
 This project includes several utility scripts for data management and content generation:

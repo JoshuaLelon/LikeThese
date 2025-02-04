@@ -1,0 +1,36 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "sweetpad: clean",
+            "type": "shell",
+            "command": "sweetpad",
+            "args": ["clean"],
+            "problemMatcher": []
+        },
+        {
+            "label": "sweetpad: build",
+            "type": "shell",
+            "command": "sweetpad",
+            "args": ["build"],
+            "problemMatcher": []
+        },
+        {
+            "label": "sweetpad: launch",
+            "type": "shell",
+            "command": "sweetpad",
+            "args": ["launch"],
+            "problemMatcher": []
+        },
+        {
+            "label": "sweetpad: clean-build-launch",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "sweetpad: clean",
+                "sweetpad: build",
+                "sweetpad: launch"
+            ],
+            "problemMatcher": []
+        }
+    ]
+} 

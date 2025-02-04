@@ -1,55 +1,32 @@
 import SwiftUI
 import AVKit
-import FirebaseStorage
 
 struct VideoPlayerView: View {
-    @State private var player: AVPlayer?
-    @State private var isPlaying: Bool = true
-    @State private var isLoading: Bool = true
+    let url: URL
+    let index: Int
+    @ObservedObject var videoManager: VideoManager
     
     var body: some View {
         ZStack {
-            if let player = player {
-                VideoPlayer(player: player)
-                    .onAppear {
-                        player.play()
-                    }
-                    .onDisappear {
-                        player.pause()
-                    }
-                    .onTapGesture {
-                        if isPlaying {
-                            player.pause()
-                        } else {
-                            player.play()
-                        }
-                        isPlaying.toggle()
-                    }
-            }
-            
-            if isLoading {
-                ProgressView()
-            }
-        }
-        .task {
-            await loadRandomVideo()
-        }
-    }
-    
-    private func loadRandomVideo() async {
-        isLoading = true
-        do {
-            let storageService = StorageService()
-            let url = try await storageService.fetchRandomVideo()
-            player = AVPlayer(url: url)
-            isLoading = false
-        } catch {
-            print("Error loading video: \(error.localizedDescription)")
-            isLoading = false
+            VideoPlayer(player: videoManager.player(for: index))
+                .onAppear {
+                    videoManager.prepareVideo(url: url, for: index)
+                }
+                .onDisappear {
+                    videoManager.cleanupVideo(for: index)
+                }
         }
     }
 }
 
-#Preview {
-    VideoPlayerView()
-} 
+#if DEBUG
+struct VideoPlayerView_Previews: PreviewProvider {
+    static var previews: some View {
+        VideoPlayerView(
+            url: URL(string: "https://example.com/video.mp4")!,
+            index: 0,
+            videoManager: VideoManager()
+        )
+    }
+}
+#endif 

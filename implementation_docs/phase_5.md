@@ -4,6 +4,18 @@
 [x] Add tap gesture on the video so it can pause/resume  
 [x] Retrieve video from Firebase Storage  
 
+### Building & Deploying
+To rebuild and redeploy the app after making changes:
+
+1. Using SweetPad UI:
+   - Click the "Clean" option in the schema context menu
+   - Click the "Build & Run" button (▶️)
+
+2. Using Terminal:
+   ```bash
+   sweetpad clean && sweetpad build && sweetpad launch
+   ```
+
 ### File Structure Tree once implemented
 LikeThese/
 ├── LikeThese

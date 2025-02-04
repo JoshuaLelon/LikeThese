@@ -16,8 +16,11 @@ if [ ! -d "venv" ]; then
     python3 -m venv venv
     source venv/bin/activate
     pip install -r requirements.txt
+    pip install --upgrade pip
+    pip install pyopenssl cryptography
 else
     source venv/bin/activate
+    pip install pyopenssl cryptography
 fi
 
 # Check if Firebase CLI is installed and logged in
@@ -45,93 +48,107 @@ if ! firebase projects:list &> /dev/null; then
     exit 1
 fi
 
-# Create directories if they don't exist
-mkdir -p "$VIDEO_DIR"
-mkdir -p "$THUMBNAIL_DIR"
+# Get list of existing files in Firebase Storage
+echo -e "${YELLOW}Checking existing files in Firebase Storage...${NC}"
+existing_videos=$(gsutil ls gs://likethese-fc23d.firebasestorage.app/videos/*.mp4 2>/dev/null)
+existing_thumbnails=$(gsutil ls gs://likethese-fc23d.firebasestorage.app/thumbnails/*.jpg 2>/dev/null)
+video_count=$(echo "$existing_videos" | wc -l)
+thumbnail_count=$(echo "$existing_thumbnails" | wc -l)
 
-# Check if we have videos
-video_count=$(ls -1 "$VIDEO_DIR"/*.mp4 2>/dev/null | wc -l)
-if [ "$video_count" -eq 0 ]; then
-    echo -e "${RED}No videos found in $VIDEO_DIR${NC}"
-    echo "Please add .mp4 videos (1080x1920 resolution) to this directory"
-    exit 1
-fi
+if [ "$video_count" -gt 0 ] && [ "$thumbnail_count" -gt 0 ]; then
+    echo -e "${GREEN}Found existing videos and thumbnails in Firebase Storage${NC}"
+    echo -e "${YELLOW}Skipping video and thumbnail upload...${NC}"
+    echo -e "${YELLOW}Proceeding to verify Firestore documents...${NC}"
+else
+    # Create directories if they don't exist
+    mkdir -p "$VIDEO_DIR"
+    mkdir -p "$THUMBNAIL_DIR"
 
-# Check if we have thumbnails
-thumbnail_count=$(ls -1 "$THUMBNAIL_DIR"/*.jpg 2>/dev/null | wc -l)
-if [ "$thumbnail_count" -eq 0 ]; then
-    echo -e "${YELLOW}No thumbnails found in $THUMBNAIL_DIR${NC}"
-    echo "Generating thumbnails from videos..."
-    
-    # Check if ffmpeg is installed
-    if ! command -v ffmpeg &> /dev/null; then
-        echo -e "${RED}ffmpeg is not installed. Please install it first:${NC}"
-        echo "brew install ffmpeg"
+    # Check if we have videos
+    video_count=$(ls -1 "$VIDEO_DIR"/*.mp4 2>/dev/null | wc -l)
+    if [ "$video_count" -eq 0 ]; then
+        echo -e "${RED}No videos found in $VIDEO_DIR${NC}"
+        echo "Please add .mp4 videos (1080x1920 resolution) to this directory"
         exit 1
     fi
-    
-    # Generate thumbnails for each video
+
+    # Check if we have thumbnails
+    thumbnail_count=$(ls -1 "$THUMBNAIL_DIR"/*.jpg 2>/dev/null | wc -l)
+    if [ "$thumbnail_count" -eq 0 ]; then
+        echo -e "${YELLOW}No thumbnails found in $THUMBNAIL_DIR${NC}"
+        echo "Generating thumbnails from videos..."
+        
+        # Check if ffmpeg is installed
+        if ! command -v ffmpeg &> /dev/null; then
+            echo -e "${RED}ffmpeg is not installed. Please install it first:${NC}"
+            echo "brew install ffmpeg"
+            exit 1
+        fi
+        
+        # Generate thumbnails for each video
+        for video in "$VIDEO_DIR"/*.mp4; do
+            basename=$(basename "$video" .mp4)
+            echo "Generating thumbnail for $basename..."
+            ffmpeg -i "$video" -vframes 1 "$THUMBNAIL_DIR/${basename}.jpg" -y
+        done
+    fi
+
+    echo -e "${GREEN}Starting upload to Firebase...${NC}"
+
+    # Upload videos and thumbnails
     for video in "$VIDEO_DIR"/*.mp4; do
         basename=$(basename "$video" .mp4)
-        echo "Generating thumbnail for $basename..."
-        ffmpeg -i "$video" -vframes 1 "$THUMBNAIL_DIR/${basename}.jpg" -y
+        thumbnail="$THUMBNAIL_DIR/${basename}.jpg"
+        
+        echo "Processing $basename..."
+        
+        # Upload video
+        echo "Uploading video $basename..."
+        if ! gsutil cp "$video" "gs://likethese-fc23d.firebasestorage.app/videos/${basename}.mp4"; then
+            echo -e "${RED}Failed to upload video $basename${NC}"
+            continue
+        fi
+        
+        # Upload thumbnail
+        echo "Uploading thumbnail for $basename..."
+        if ! gsutil cp "$thumbnail" "gs://likethese-fc23d.firebasestorage.app/thumbnails/${basename}.jpg"; then
+            echo -e "${RED}Failed to upload thumbnail for $basename${NC}"
+            continue
+        fi
+        
+        echo -e "${GREEN}Successfully uploaded $basename${NC}"
     done
 fi
 
-echo -e "${GREEN}Starting upload to Firebase...${NC}"
-
-# Upload videos and create Firestore documents
-for video in "$VIDEO_DIR"/*.mp4; do
+# Verify and create Firestore documents
+echo -e "${GREEN}Verifying Firestore documents...${NC}"
+echo "$existing_videos" | while read -r video; do
+    [ -z "$video" ] && continue
     basename=$(basename "$video" .mp4)
-    thumbnail="$THUMBNAIL_DIR/${basename}.jpg"
+    echo "Checking Firestore document for $basename..."
     
-    echo "Processing $basename..."
-    
-    # Check if video already exists in Firebase
-    if gsutil ls "gs://likethese-fc23d.firebasestorage.app/videos/${basename}.mp4" &> /dev/null; then
-        echo "Video $basename already exists, skipping..."
-        continue
+    # Check if document exists
+    if firebase firestore:get "videos/${basename}" --project=likethese-fc23d &>/dev/null; then
+        echo -e "${GREEN}✓ Document exists for $basename${NC}"
+    else
+        echo -e "${YELLOW}Creating document for $basename...${NC}"
+        
+        # Create Firestore document using Node.js script
+        if node scripts/update_firestore.js "$basename"; then
+            echo -e "${GREEN}✓ Created document for $basename${NC}"
+        else
+            echo -e "${RED}✗ Failed to create document for $basename${NC}"
+        fi
     fi
-    
-    # Upload video
-    echo "Uploading video $basename..."
-    if ! gsutil cp "$video" "gs://likethese-fc23d.firebasestorage.app/videos/${basename}.mp4"; then
-        echo -e "${RED}Failed to upload video $basename${NC}"
-        continue
-    fi
-    
-    # Upload thumbnail
-    echo "Uploading thumbnail for $basename..."
-    if ! gsutil cp "$thumbnail" "gs://likethese-fc23d.firebasestorage.app/thumbnails/${basename}.jpg"; then
-        echo -e "${RED}Failed to upload thumbnail for $basename${NC}"
-        continue
-    fi
-    
-    # Get download URLs
-    video_url=$(gsutil signurl -d 7d "gs://likethese-fc23d.firebasestorage.app/videos/${basename}.mp4" | awk 'NR==2{print $5}')
-    thumbnail_url=$(gsutil signurl -d 7d "gs://likethese-fc23d.firebasestorage.app/thumbnails/${basename}.jpg" | awk 'NR==2{print $5}')
-    
-    # Create Firestore document
-    echo "Creating Firestore document for $basename..."
-    firebase firestore:set --project=likethese-fc23d "videos/$basename" "{
-        videoFilePath: 'gs://likethese-fc23d.firebasestorage.app/videos/${basename}.mp4',
-        thumbnailFilePath: 'gs://likethese-fc23d.firebasestorage.app/thumbnails/${basename}.jpg',
-        createdAt: $(date +%s)
-    }"
-    
-    echo -e "${GREEN}Successfully processed $basename${NC}"
 done
 
-echo -e "${GREEN}Upload process complete!${NC}"
-
-# Verify uploads
-echo -e "\n${YELLOW}Verifying uploads...${NC}"
-
-# Check Storage
-echo -e "\nChecking Firebase Storage:"
-echo "Videos:"
-gsutil ls gs://likethese-fc23d.firebasestorage.app/videos/
-echo -e "\nThumbnails:"
-gsutil ls gs://likethese-fc23d.firebasestorage.app/thumbnails/
+# Print summary
+echo -e "\n${YELLOW}Summary:${NC}"
+echo -e "Videos in Storage: $video_count"
+echo -e "Thumbnails in Storage: $thumbnail_count"
+echo -e "\nVideo files:"
+echo "$existing_videos"
+echo -e "\nThumbnail files:"
+echo "$existing_thumbnails"
 
 echo -e "\n${GREEN}Verification complete!${NC}" 

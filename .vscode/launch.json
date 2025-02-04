@@ -7,5 +7,12 @@
             "name": "Attach to running app (SweetPad)",
             "preLaunchTask": "sweetpad: launch"
         }
+    ],
+    "compounds": [
+        {
+            "name": "Clean, Build & Launch",
+            "configurations": ["Attach to running app (SweetPad)"],
+            "preLaunchTask": "sweetpad: clean-build-launch"
+        }
     ]
 }

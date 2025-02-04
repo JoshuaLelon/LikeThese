@@ -596,7 +596,7 @@ func signOut() throws {
 [ ] Create a Firestore database in the Firebase console.  
 [ ] Define collections for users, videos, and interactions based on your ER diagram.  
 [ ] Add simple rules (e.g., read/write only if authenticated).  
-[ ] Sketch out Swift data models (structs/classes) for user, video, and interaction.  
+[ ] Sketch out Swift data models (structs/classes) for user, video, and interaction using the ER Diagram below.
 
 ### File Structure Tree once implemented
 LikeThese/

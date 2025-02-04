@@ -120,24 +120,25 @@ else
     done
 fi
 
-# Verify and create Firestore documents
-echo -e "${GREEN}Verifying Firestore documents...${NC}"
+# Verify and create Firestore documents if needed
+echo -e "${GREEN}Checking and creating Firestore documents...${NC}"
 echo "$existing_videos" | while read -r video; do
     [ -z "$video" ] && continue
     basename=$(basename "$video" .mp4)
-    echo "Checking Firestore document for $basename..."
+    echo -e "\n${YELLOW}Processing $basename...${NC}"
     
     # Check if document exists
-    if firebase firestore:get "videos/${basename}" --project=likethese-fc23d &>/dev/null; then
-        echo -e "${GREEN}✓ Document exists for $basename${NC}"
+    if node scripts/update_firestore.js check "$basename"; then
+        echo -e "${GREEN}✓ Document already exists for $basename${NC}"
     else
-        echo -e "${YELLOW}Creating document for $basename...${NC}"
+        echo -e "${YELLOW}Document missing for $basename, creating...${NC}"
         
         # Create Firestore document using Node.js script
-        if node scripts/update_firestore.js "$basename"; then
-            echo -e "${GREEN}✓ Created document for $basename${NC}"
+        if node scripts/update_firestore.js create "$basename"; then
+            echo -e "${GREEN}✓ Successfully created document for $basename${NC}"
         else
             echo -e "${RED}✗ Failed to create document for $basename${NC}"
+            exit 1
         fi
     fi
 done
@@ -150,5 +151,9 @@ echo -e "\nVideo files:"
 echo "$existing_videos"
 echo -e "\nThumbnail files:"
 echo "$existing_thumbnails"
+
+# Print all Firestore documents
+echo -e "\n${YELLOW}Current Firestore documents:${NC}"
+node scripts/update_firestore.js list
 
 echo -e "\n${GREEN}Verification complete!${NC}" 

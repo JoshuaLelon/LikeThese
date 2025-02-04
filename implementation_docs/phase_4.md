@@ -1,5 +1,15 @@
 ## Phase 4: Seeding the Database
 
+### Prerequisites
+1. Firebase project must be set up with:
+   - Firestore database created and enabled (in test mode for MVP)
+   - Storage enabled
+   - Proper security rules configured
+2. Local development environment must have:
+   - Node.js and npm installed
+   - Firebase CLI installed and logged in
+   - ffmpeg installed (for thumbnail generation)
+
 ### Overview
 We use a simple bash script that leverages the Firebase CLI to seed our database with test videos. The script:
 1. Automatically generates thumbnails from videos using ffmpeg
@@ -8,16 +18,27 @@ We use a simple bash script that leverages the Firebase CLI to seed our database
 
 ### Checklist
 [PROGRESS] Create a small script or function that uploads sample videos and images (as video thumbnails) to Firestore.  
-  - [ ] Acquire 12 TikTok resolution videos for testing (1080x1920)
+  - [x] Acquire 20 TikTok resolution videos for testing (1080x1920)
   - [x] Create bash script for handling uploads:
     - [x] Auto-generate thumbnails using ffmpeg
     - [x] Check for existing videos before upload
     - [x] Upload videos and thumbnails to Storage
     - [x] Create Firestore documents with URLs
-  - [ ] Make script executable: `chmod +x scripts/seed_videos.sh`
-  - [x] Document script usage in README.md
-[ ] Test retrieval of sample data in the app.  
-[ ] Confirm data seeds appear in the Firestore console.  
+  - [x] Make script executable: `chmod +x scripts/seed_videos.sh`
+  - [x] Document script usage in README.md 
+[PROGRESS] Confirm data seeds appear in the Firestore console.  
+  - [x] Create Firestore database in Firebase Console
+    - Created in test mode for MVP
+    - Default security rules allow read/write until March 6, 2025
+    - Will need to update security rules before production
+  - [x] Configure Firestore security rules (using test mode defaults for MVP)
+  - [x] Enable Firebase Storage
+    - Bucket URL: likethese-fc23d.firebasestorage.app
+  - [x] Configure Storage security rules (using test mode defaults for MVP)
+    - Default security rules allow read/write for 30 days
+    - Will need to update security rules before production
+  - [ ] Run seeding script
+  - [ ] Verify data in Firebase Console
 
 ### One-Time Setup
 1. Install Node.js and npm (if not already installed):
@@ -93,6 +114,14 @@ LikeThese/
 - Make sure you have enough Firebase Storage quota
 - Script is idempotent (safe to run multiple times)
 - Already uploaded videos will be skipped
+- Firebase CLI must be installed (`npm install -g firebase-tools`)
+- ffmpeg must be installed (`brew install ffmpeg`)
+- Must be logged into Firebase CLI (`firebase login`)
+- Sample videos must be in .mp4 format
+- Ensure your Firebase project has Storage and Firestore enabled
+- Database is in test mode - DO NOT USE FOR PRODUCTION
+- Current security rules expire on March 6, 2025
+- Must update security rules within 30 days for production use
 
 ### Files from another repository to use for inspiration:
 - TikTok-Clone/Controllers/Create Post/CreatePostVC.swift  
@@ -131,18 +160,4 @@ function loadSeededVideos() {
         }
     }
 }
-```
-
-#### `Pods/FirebaseAuth/README.md`
-```markdown:Pods/FirebaseAuth/README.md
-# Placeholder for FirebaseAuth README
-
-This file would typically describe set up notes and examples for
-configuring FirebaseAuth in your iOS project:
-- Enabling Email/Password sign-in
-- Adding OAuth providers
-- Handling user sessions and tokens
-
-See official docs for details:
-https://firebase.google.com/docs/auth
 ```

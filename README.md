@@ -77,7 +77,7 @@ CocoaPods is used to install and manage dependencies in existing Xcode projects.
     pod install
     ```
 
-7.  Open your app’s `.xcworkspace` file to launch Xcode. Use this file for all
+7.  Open your app's `.xcworkspace` file to launch Xcode. Use this file for all
     development on your app.
 
 8.  You can also install other Firebase SDKs by adding subspecs in the
@@ -141,7 +141,7 @@ pod 'FirebaseCore', :git => 'https://github.com/firebase/firebase-ios-sdk.git', 
 pod 'FirebaseFirestore', :git => 'https://github.com/firebase/firebase-ios-sdk.git', :branch => 'master'
 ```
 
-Or, if you’ve checked out the repo locally:
+Or, if you've checked out the repo locally:
 ```
 pod 'FirebaseCore', :path => '/path/to/firebase-ios-sdk'
 pod 'FirebaseMessaging', :path => '/path/to/firebase-ios-sdk'
@@ -180,7 +180,7 @@ See [AddNewPod.md](AddNewPod.md).
 
 ### Code Formatting
 To ensure consistent formatting, run `./scripts/style.sh` before creating a PR.
-You’ll need `clang-format` and `swiftformat`.
+You'll need `clang-format` and `swiftformat`.
 
 ### Running Unit Tests
 Select a scheme and press Command-u to build a component and run its tests.
@@ -215,7 +215,7 @@ Storage Integration tests.
 #### Push Notifications
 Push notifications can only be delivered to specially provisioned App IDs in the
 developer portal. You must:
-1. Change the sample app’s bundle identifier to one you own in your Apple
+1. Change the sample app's bundle identifier to one you own in your Apple
    Developer account, and enable push notifications.
 2. [Upload your APNs key/certificate to the Firebase console](https://firebase.google.com/docs/cloud-messaging/ios/certs).
 3. Ensure your iOS device is registered in your Apple Developer portal.
@@ -227,7 +227,7 @@ Push notifications won't work on the iOS Simulator, only physical devices.
 
 ## Community Supported Efforts
 
-We’re grateful for the community interest and contributions to make Firebase
+We're grateful for the community interest and contributions to make Firebase
 SDKs accessible on macOS and tvOS (community support only). For installation
 on those platforms:
 ```
@@ -382,7 +382,7 @@ These instructions can be used to access the Firebase repo at other branches,
 tags, or commits.
 
 **Accessing Firebase Source Snapshots**  
-All official releases are tagged in this repo and available via CocoaPods.
+All official releases are tagged in this repo and available via CocoaPods. 
 To access a local source snapshot or an unreleased branch, use Podfile
 directives like the following:
 ```
@@ -390,7 +390,7 @@ pod 'FirebaseCore', :git => 'https://github.com/firebase/firebase-ios-sdk.git', 
 pod 'FirebaseFirestore', :git => 'https://github.com/firebase/firebase-ios-sdk.git', :branch => 'master'
 ```
 
-Or, if you’ve checked out the repo locally:
+Or, if you've checked out the repo locally:
 ```
 pod 'FirebaseCore', :path => '/path/to/firebase-ios-sdk'
 pod 'FirebaseMessaging', :path => '/path/to/firebase-ios-sdk'
@@ -430,7 +430,7 @@ See [AddNewPod.md](AddNewPod.md).
 
 ### Code Formatting
 To ensure consistent formatting, run `./scripts/style.sh` before creating a PR.
-You’ll need `clang-format` and `swiftformat`.
+You'll need `clang-format` and `swiftformat`.
 
 ### Running Unit Tests
 Select a scheme and press Command-u to build a component and run its tests.
@@ -466,7 +466,7 @@ Storage Integration tests.
 #### Push Notifications
 Push notifications can only be delivered to specially provisioned App IDs in the
 developer portal. You must:
-1. Change the sample app’s bundle identifier to one you own in your Apple
+1. Change the sample app's bundle identifier to one you own in your Apple
    Developer account, and enable push notifications.
 2. [Upload your APNs key/certificate to the Firebase console](https://firebase.google.com/docs/cloud-messaging/ios/certs).
 3. Ensure your iOS device is registered in your Apple Developer portal.
@@ -478,7 +478,7 @@ Push notifications won't work on the iOS Simulator, only physical devices.
 
 ## Community Supported Efforts
 
-We’re grateful for the community interest and contributions to make Firebase
+We're grateful for the community interest and contributions to make Firebase
 SDKs accessible on macOS and tvOS (community support only). For installation
 on those platforms:
 ```
@@ -670,7 +670,7 @@ pod 'FirebaseCore', :git => 'https://github.com/firebase/firebase-ios-sdk.git', 
 pod 'FirebaseFirestore', :git => 'https://github.com/firebase/firebase-ios-sdk.git', :branch => 'master'
 ```
 
-Or, if you’ve checked out the repo locally:
+Or, if you've checked out the repo locally:
 ```
 pod 'FirebaseCore', :path => '/path/to/firebase-ios-sdk'
 pod 'FirebaseMessaging', :path => '/path/to/firebase-ios-sdk'
@@ -709,7 +709,7 @@ See [AddNewPod.md](AddNewPod.md).
 
 ### Code Formatting
 To ensure consistent formatting, run `./scripts/style.sh` before creating a PR.
-You’ll need `clang-format` and `swiftformat`.
+You'll need `clang-format` and `swiftformat`.
 
 ### Running Unit Tests
 Select a scheme and press Command-u to build a component and run its tests.
@@ -744,7 +744,7 @@ Storage Integration tests.
 #### Push Notifications
 Push notifications can only be delivered to specially provisioned App IDs in the
 developer portal. You must:
-1. Change the sample app’s bundle identifier to one you own in your Apple
+1. Change the sample app's bundle identifier to one you own in your Apple
    Developer account, and enable push notifications.
 2. [Upload your APNs key/certificate to the Firebase console](https://firebase.google.com/docs/cloud-messaging/ios/certs).
 3. Ensure your iOS device is registered in your Apple Developer portal.
@@ -756,7 +756,7 @@ Push notifications won't work on the iOS Simulator, only physical devices.
 
 ## Community Supported Efforts
 
-We’re grateful for the community interest and contributions to make Firebase
+We're grateful for the community interest and contributions to make Firebase
 SDKs accessible on macOS and tvOS (community support only). For installation
 on those platforms:
 ```
@@ -782,7 +782,7 @@ All code in this repository is under the
 
 Your use of Firebase is governed by the
 [Terms of Service for Firebase Services](https://firebase.google.com/terms/).
-````
+```
 
 #### `TikTok-Clone/Controllers/Create Post/CreatePostVC.swift`
 `````swift:TikTok-Clone/Controllers/Create Post/CreatePostVC.swift
@@ -1643,3 +1643,8 @@ Decision: Firebase Cloud Functions (serverless backend)
 Purpose: Handles video processing, recommendation logic, AI-driven features, and integration with external APIs.
 Description: Manages compute-intensive tasks like processing video interactions or dynamically updating the Inspirations grid based on swiping patterns.
 Provides flexibility to integrate future AI models or external APIs without architectural changes.
+
+## Development Requirements
+
+- Python 3.9 or higher (required for xcode-build-server)
+- Xcode and related development tools

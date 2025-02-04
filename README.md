@@ -1643,12 +1643,3 @@ Decision: Firebase Cloud Functions (serverless backend)
 Purpose: Handles video processing, recommendation logic, AI-driven features, and integration with external APIs.
 Description: Manages compute-intensive tasks like processing video interactions or dynamically updating the Inspirations grid based on swiping patterns.
 Provides flexibility to integrate future AI models or external APIs without architectural changes.
-
-## Phase 10: Final Integration & Deployment
-### Files from another repository to use for inspiration:
-- Pods/Firebase/README.md  
-  • Advice on finalizing Firebase integrations (Storage, Firestore, Auth, etc.)  
-- TikTok.xcodeproj/project.pbxproj  
-  • Helpful for grouping final features or adjusting build settings  
-- Any relevant Swift or UI references in the Firebase Docs  
-  • https://firebase.google.com/docs/ios/setup and related official docs for best practices

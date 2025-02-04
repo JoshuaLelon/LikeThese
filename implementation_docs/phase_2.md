@@ -1,11 +1,11 @@
 ## Phase 2: Set up Auth
 ### Checklist
-[ ] Enable Email/Password sign-in from the Firebase console and link the iOS app to the Firebase project.  
-[ ] Add the FirebaseAuth dependency (via Swift Package Manager).  
-[ ] Update AppDelegate (or SwiftUI App) to configure Firebase and handle authentication states.  
-[ ] Create a simple "Sign Up" and "Log In" flow.  
-[ ] Implement basic "Create Account," "Log In," and "Log Out" in code using FirebaseAuth.  
-[ ] Testing: Confirm a new user can be created, can log in, and can log out successfully.
+[x] Enable Email/Password sign-in from the Firebase console and link the iOS app to the Firebase project.  
+[x] Add the FirebaseAuth dependency (via Swift Package Manager).  
+[x] Update AppDelegate (or SwiftUI App) to configure Firebase and handle authentication states.  
+[x] Create a simple "Sign Up" and "Log In" flow.  
+[x] Implement basic "Create Account," "Log In," and "Log Out" in code using FirebaseAuth.  
+[x] Testing: Confirm a new user can be created, can log in, and can log out successfully.
 
 ### File Structure Tree once implemented
 LikeThese/

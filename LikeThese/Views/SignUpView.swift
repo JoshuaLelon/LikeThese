@@ -9,47 +9,114 @@ struct SignUpView: View {
     @State private var confirmPassword = ""
     @State private var showError = false
     @State private var errorMessage = ""
+    @State private var isLoading = false
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Create Account")
-                .font(.largeTitle)
-                .fontWeight(.bold)
+        ZStack {
+            // Background gradient
+            LinearGradient(gradient: Gradient(colors: [.blue.opacity(0.3), .purple.opacity(0.3)]),
+                         startPoint: .topLeading,
+                         endPoint: .bottomTrailing)
+                .ignoresSafeArea()
             
-            VStack(spacing: 15) {
-                TextField("Email", text: $email)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .textContentType(.emailAddress)
-                    .textInputAutocapitalization(.never)
+            VStack(spacing: 25) {
+                // Title area
+                VStack(spacing: 10) {
+                    Text("Create Account")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundColor(.primary)
+                    
+                    Text("Sign up to get started")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 50)
                 
-                SecureField("Password", text: $password)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .textContentType(.newPassword)
-                
-                SecureField("Confirm Password", text: $confirmPassword)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .textContentType(.newPassword)
-            }
-            .padding(.horizontal)
-            
-            Button(action: signUp) {
-                Text("Sign Up")
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
+                // Input fields
+                VStack(spacing: 20) {
+                    // Email field
+                    HStack {
+                        Image(systemName: "envelope.fill")
+                            .foregroundColor(.gray)
+                        TextField("Email", text: $email)
+                            .textContentType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .keyboardType(.emailAddress)
+                    }
                     .padding()
-                    .background(Color.blue)
-                    .cornerRadius(10)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(15)
+                    .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 5)
+                    
+                    // Password field
+                    HStack {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.gray)
+                        SecureField("Password", text: $password)
+                            .textContentType(.newPassword)
+                    }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .cornerRadius(15)
+                    .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 5)
+                    
+                    // Confirm Password field
+                    HStack {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.gray)
+                        SecureField("Confirm Password", text: $confirmPassword)
+                            .textContentType(.newPassword)
+                    }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .cornerRadius(15)
+                    .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 5)
+                }
+                .padding(.horizontal)
+                
+                // Password requirements
+                if !password.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        PasswordRequirementRow(text: "At least 6 characters", isMet: password.count >= 6)
+                        PasswordRequirementRow(text: "Passwords match", isMet: !confirmPassword.isEmpty && password == confirmPassword)
+                    }
+                    .padding(.horizontal)
+                }
+                
+                // Sign up button
+                Button(action: signUp) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 15)
+                            .fill(Color.blue)
+                        
+                        if isLoading {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        } else {
+                            Text("Sign Up")
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+                .frame(height: 50)
+                .padding(.horizontal)
+                .disabled(isLoading || !isValidForm)
+                .opacity(isValidForm ? 1 : 0.6)
+                
+                // Sign in link
+                Button(action: { dismiss() }) {
+                    Text("Already have an account? ")
+                        .foregroundColor(.secondary) +
+                    Text("Sign In")
+                        .foregroundColor(.blue)
+                        .fontWeight(.semibold)
+                }
+                .padding(.top)
             }
-            .padding(.horizontal)
-            .disabled(!isValidForm)
-            
-            Button(action: { dismiss() }) {
-                Text("Already have an account? Sign In")
-                    .foregroundColor(.blue)
-            }
+            .padding()
         }
-        .padding()
         .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -62,11 +129,13 @@ struct SignUpView: View {
         !password.isEmpty && 
         !confirmPassword.isEmpty && 
         password == confirmPassword &&
-        password.count >= 6
+        password.count >= 6 &&
+        email.contains("@")
     }
     
     private func signUp() {
         guard isValidForm else { return }
+        isLoading = true
         
         Task {
             do {
@@ -85,6 +154,22 @@ struct SignUpView: View {
                 errorMessage = error.localizedDescription
                 showError = true
             }
+            isLoading = false
+        }
+    }
+}
+
+struct PasswordRequirementRow: View {
+    let text: String
+    let isMet: Bool
+    
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isMet ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(isMet ? .green : .gray)
+            Text(text)
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
     }
 }

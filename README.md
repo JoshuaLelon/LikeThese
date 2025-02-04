@@ -1,11 +1,11 @@
 # Implementation Checklist
 
-## Phase 1: "Hello World" & Firebase Setup
+## Phase 1: "Hello World" & Firebase Setup ✅
 ### Checklist
-[ ] Create a new Xcode project for Swift (UIKit or SwiftUI).  
-[ ] Integrate Firebase SDK (Auth, Firestore, Storage) using CocoaPods or Swift Package Manager.  
-[ ] Configure Firebase in AppDelegate (or SwiftUI App) to ensure connection.  
-[ ] Add a simple "Hello World" label or SwiftUI Text view to confirm the app runs.  
+[x] Create a new Xcode project for Swift (UIKit or SwiftUI).  
+[x] Integrate Firebase SDK (Auth, Firestore, Storage) using Swift Package Manager.  
+[x] Configure Firebase in AppDelegate (or SwiftUI App) to ensure connection.  
+[x] Add a simple "Hello World" label or SwiftUI Text view to confirm the app runs.  
 
 ### File Structure Tree once implemented
 LikeThese/
@@ -290,14 +290,14 @@ Your use of Firebase is governed by the
 /* Some lines omitted for brevity */
 ```
 
-## Phase 2: Set up Auth
+## Phase 2: Set up Auth ✅
 ### Checklist
-[ ] Enable Email/Password sign-in from the Firebase console and link the iOS app to the Firebase project.  
-[ ] Add the FirebaseAuth dependency (via CocoaPods or Swift Package Manager).  
-[ ] Update AppDelegate (or SwiftUI App) to configure Firebase and handle authentication states.  
-[ ] Create a simple "Sign Up" and "Log In" flow (e.g., two SwiftUI Views or UIKit ViewControllers).  
-[ ] Implement basic "Create Account," "Log In," and "Log Out" in code using FirebaseAuth.  
-[ ] Testing: Confirm a new user can be created, can log in, and can log out successfully.
+[x] Enable Email/Password sign-in from the Firebase console and link the iOS app to the Firebase project.  
+[x] Add the FirebaseAuth dependency (via Swift Package Manager).  
+[x] Update AppDelegate (or SwiftUI App) to configure Firebase and handle authentication states.  
+[x] Create a simple "Sign Up" and "Log In" flow.  
+[x] Implement basic "Create Account," "Log In," and "Log Out" in code using FirebaseAuth.  
+[x] Testing: Confirm a new user can be created, can log in, and can log out successfully.
 
 ### File Structure Tree once implemented
 LikeThese/
@@ -419,10 +419,9 @@ For the pod you want to develop:
 ```
 pod gen Firebase{name here}.podspec --local-sources=./ --auto-open
 ```
-
 (You may need to run `pod repo update` first if the CocoaPods cache is out of date.)
 
-Cloud Firestore has a self-contained Xcode project.
+Cloud Firestore has a self-contained Xcode project. 
 See [Firestore/README.md](Firestore/README.md).
 
 ### Adding a New Firebase Pod
@@ -440,7 +439,6 @@ After running `AllUnitTests_iOS`, execute:
 ```
 xcov --workspace Firebase.xcworkspace --scheme AllUnitTests_iOS --output_directory xcov_output
 ```
-
 Then `open xcov_output/index.html`.
 
 ### Running Sample Apps
@@ -490,7 +488,6 @@ pod 'FirebaseMessaging'
 pod 'FirebaseRemoteConfig'
 pod 'FirebaseStorage'
 ```
-
 (plus any others you might need).
 
 ## Roadmap
@@ -1621,6 +1618,8 @@ For **lifelong learners and knowledge seekers**, this app is more than a recomme
 Frontend
 Language: Swift
 Framework: SwiftUI (or UIKit as needed)
+Package Manager: Swift Package Manager
+Build/Run: Sweetpad
 
 Backend Services (via Firebase)
 The backend is designed to handle user authentication, data storage, video recommendations, and serverless logic using Firebase. Firebase's serverless nature simplifies infrastructure management while allowing for scalability and rapid development.

@@ -2,7 +2,7 @@ import SwiftUI
 import AVKit
 import os
 
-private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoPlayerView")
+private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoPlayer")
 
 struct VideoPlayerView: View {
     let url: URL
@@ -15,21 +15,29 @@ struct VideoPlayerView: View {
         ZStack {
             VideoPlayer(player: videoManager.player(for: index))
                 .onAppear {
+                    logger.debug("📱 VIDEO PLAYER: View appeared for index \(index)")
                     Task {
                         do {
                             let playerItem = try await videoCacheService.preloadVideo(url: url)
                             await MainActor.run {
-                                videoManager.player(for: index).replaceCurrentItem(with: playerItem)
-                                videoManager.player(for: index).play()
+                                let player = videoManager.player(for: index)
+                                if player.currentItem == nil {
+                                    player.replaceCurrentItem(with: playerItem)
+                                    player.play()
+                                    logger.debug("✅ VIDEO PLAYER: Started playback for index \(index)")
+                                } else {
+                                    logger.debug("ℹ️ VIDEO PLAYER: Player already has item for index \(index)")
+                                }
                                 isLoading = false
                             }
                         } catch {
-                            logger.error("❌ Error loading video: \(error.localizedDescription)")
-                            // Show error state if needed
+                            logger.error("❌ VIDEO PLAYER: Error loading video \(index): \(error.localizedDescription)")
+                            isLoading = false
                         }
                     }
                 }
                 .onDisappear {
+                    logger.debug("📱 VIDEO PLAYER: View disappeared for index \(index)")
                     videoManager.cleanupVideo(for: index)
                 }
             

@@ -1,5 +1,5 @@
 [x] I want to have comprehensive logging. Specifically, i want all pauses, unpauses, plays, swipe ups, and swipe downs to be logged, both by the app and by the user. I also want all video events (a video is paused or played) and all swipes (e.g. the video changes, the next video is loaded, the previous video is loaded) to be logged.
-[ ] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.
+[IP] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.
 [ ] when I log in, I want the app to show a loading screen until ALL the videos are loaded
 [ ] when any video finishes playing, I want the app to show a "swipe up event" and then the next video to start playing automatically 
 
@@ -850,6 +850,204 @@ For detailed documentation about these issues, see `LOGGING.md`.
 - Memory usage patterns
 
 All logs follow the standardized format defined in LOGGING.md and include relevant context such as video indices, timestamps, and state information.
+
+### Video Playback and Swiping Functionality Insights
+
+#### Observer Management Issues
+1. **Time Observer Conflicts**
+   - Issue: AVPlayer time observers were being incorrectly removed from different player instances
+   - Fix: Implemented proper tracking of time observers per player using `timeObservers` dictionary
+   - Each player now maintains its own set of observers that are properly cleaned up
+
+2. **Observer Cleanup Timing**
+   - Issue: Observers were being cleaned up too early or at wrong times
+   - Fix: Restructured cleanup process to ensure observers are removed in correct order:
+     - Remove time observers first
+     - Then remove KVO observers
+     - Finally clean up player items and references
+
+3. **Multiple Observer Types**
+   - Tracking three types of observers:
+     - Time observers for playback progress
+     - KVO observers for buffering state
+     - End time observers for video completion
+
+#### Player Lifecycle Management
+1. **Player Creation and Reuse**
+   - Implemented proper player reuse strategy
+   - Players are cached in `players` dictionary
+   - Preloaded players are stored separately in `preloadedPlayers`
+
+2. **Player Cleanup**
+   - Systematic cleanup process:
+     - Pause playback
+     - Remove player item
+     - Clear all observers
+     - Remove from both active and preloaded collections
+
+3. **State Management**
+   - Tracking multiple player states:
+     - Buffering state
+     - Playback progress
+     - Network availability
+     - Player control status
+
+#### Performance Optimizations
+1. **Memory Management**
+   - Cleaning up distant players (more than 2 positions away)
+   - Proper cleanup of all resources when players are no longer needed
+   - Avoiding memory leaks from observer references
+
+2. **Buffering Strategy**
+   - Implemented preferred buffer duration (10 seconds)
+   - Tracking buffer progress
+   - Handling network interruptions
+
+#### Error Handling and Recovery
+1. **Network Handling**
+   - Monitoring network state changes
+   - Queueing failed loads for retry
+   - Automatic retry when network becomes available
+
+2. **Playback Error Recovery**
+   - Automatic retry for failed video loads
+   - Handling unknown player states
+   - Recovery mechanisms for play/pause failures
+
+#### Logging and Debugging
+1. **Comprehensive Logging**
+   - Player state transitions
+   - Buffer progress
+   - Network state changes
+   - User actions
+   - Error conditions
+
+2. **Performance Metrics**
+   - Tracking video progress
+   - Buffer state
+   - Network conditions
+   - Player state transitions
+
+### Implementation Status
+
+#### Attempt 1 - Initial Implementation
+**Plan:**
+- Fix network state management
+- Improve video player state handling
+- Fix gesture recognition issues
+- Resolve memory management problems
+
+**Expected Behavior:**
+- Smooth transitions between videos
+- Proper state management during network changes
+- Clean gesture handling without conflicts
+- No memory leaks from observers
+
+**Actual Results:**
+- Network state properly propagates to all components
+- Video player states are properly cleaned up
+- Gesture recognition improved with proper state reset
+- Memory management improved with proper cleanup
+
+#### Attempt 2 - State Management Fixes
+**Plan:**
+- Fix video track loading issues
+- Improve state transitions between videos
+- Add proper cleanup during transitions
+- Handle race conditions in state updates
+
+**Expected Behavior:**
+- No more AVAssetTrack loading errors
+- Clean state transitions between videos
+- No memory leaks or resource issues
+- Proper error handling and recovery
+
+**Changes Made:**
+1. Fixed video track property loading
+   - Updated asset keys to match AVFoundation requirements
+   - Added proper error handling for non-playable assets
+2. Improved observer management
+   - Proper tracking of observer lifecycles
+   - Correct cleanup timing
+3. Enhanced error recovery
+   - Automatic retries for failed loads
+   - Network state handling
+4. Optimized resource management
+   - Proper cleanup of distant videos
+   - Memory leak prevention
+
+### Current Status
++ [IP] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.
+- [ ] I want a loading screen until all videos are loaded when I log in
+- [ ] I want to be able to swipe up and down to see different videos
+- [ ] I want to be able to tap on a video to pause it
+- [ ] I want to be able to tap on a video to play it
+- [ ] I want to be able to see the video progress
+- [ ] I want to be able to see the video duration
+- [ ] I want to be able to see the video title
+- [ ] I want to be able to see the video description
+- [ ] I want to be able to see the video author
+- [ ] I want to be able to see the video likes
+- [ ] I want to be able to see the video comments
+- [ ] I want to be able to like a video
+- [ ] I want to be able to comment on a video
+- [ ] I want to be able to share a video
+- [ ] I want to be able to report a video
+- [ ] I want to be able to block a user
+- [ ] I want to be able to follow a user
+- [ ] I want to be able to see my profile
+- [ ] I want to be able to see other user's profiles
+- [ ] I want to be able to edit my profile
+- [ ] I want to be able to delete my account
+- [ ] I want to be able to log out
+- [ ] I want to be able to change my password
+- [ ] I want to be able to change my email
+- [ ] I want to be able to change my username
+- [ ] I want to be able to change my profile picture
+- [ ] I want to be able to change my bio
+- [ ] I want to be able to change my location
+- [ ] I want to be able to change my website
+- [ ] I want to be able to change my social media links
+- [ ] I want to be able to change my privacy settings
+- [ ] I want to be able to change my notification settings
+- [ ] I want to be able to change my language settings
+- [ ] I want to be able to change my theme settings
+- [ ] I want to be able to change my accessibility settings
+- [ ] I want to be able to change my data usage settings
+- [ ] I want to be able to change my storage settings
+- [ ] I want to be able to change my download settings
+- [ ] I want to be able to change my upload settings
+- [ ] I want to be able to change my video quality settings
+- [ ] I want to be able to change my audio quality settings
+- [ ] I want to be able to change my autoplay settings
+- [ ] I want to be able to change my caption settings
+- [ ] I want to be able to change my subtitle settings
+- [ ] I want to be able to change my playback speed settings
+- [ ] I want to be able to change my video orientation settings
+- [ ] I want to be able to change my video aspect ratio settings
+- [ ] I want to be able to change my video zoom settings
+- [ ] I want to be able to change my video crop settings
+- [ ] I want to be able to change my video filter settings
+- [ ] I want to be able to change my video effect settings
+- [ ] I want to be able to change my video transition settings
+- [ ] I want to be able to change my video background settings
+- [ ] I want to be able to change my video overlay settings
+- [ ] I want to be able to change my video watermark settings
+- [ ] I want to be able to change my video thumbnail settings
+- [ ] I want to be able to change my video preview settings
+- [ ] I want to be able to change my video analytics settings
+- [ ] I want to be able to change my video monetization settings
+- [ ] I want to be able to change my video advertising settings
+- [ ] I want to be able to change my video sponsorship settings
+- [ ] I want to be able to change my video partnership settings
+- [ ] I want to be able to change my video collaboration settings
+- [ ] I want to be able to change my video licensing settings
+- [ ] I want to be able to change my video copyright settings
+- [ ] I want to be able to change my video distribution settings
+- [ ] I want to be able to change my video promotion settings
+- [ ] I want to be able to change my video marketing settings
+- [ ] I want to be able to change my video optimization settings
+- [ ] I want to be able to change my video SEO settings
 
 
 

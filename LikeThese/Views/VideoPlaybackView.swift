@@ -26,130 +26,7 @@ struct VideoPlaybackView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
-                if viewModel.isLoading && viewModel.videos.isEmpty {
-                    ProgressView("Loading videos...")
-                        .onAppear {
-                            logger.debug("⌛️ LOADING STATE: Initial videos loading")
-                        }
-                } else if let error = viewModel.error {
-                    ErrorView(error: error) {
-                        Task {
-                            logger.debug("🔄 USER ACTION: Retrying initial video load after error")
-                            await viewModel.loadInitialVideos()
-                        }
-                    }
-                } else {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(viewModel.videos.enumerated()), id: \.element.id) { index, video in
-                                if let url = URL(string: video.url) {
-                                    ZStack {
-                                        VideoPlayerView(url: url, index: index, videoManager: videoManager)
-                                            .frame(width: geometry.size.width, height: geometry.size.height)
-                                            .id(index)
-                                            .onAppear {
-                                                logger.debug("📱 VIEW LIFECYCLE: Video view \(index) appeared")
-                                                logger.debug("📊 QUEUE INFO: Current queue position \(index + 1) of \(viewModel.videos.count)")
-                                                if currentIndex == nil {
-                                                    currentIndex = index
-                                                    logger.debug("🎯 VIEW STATE: Setting initial current index to \(index)")
-                                                }
-                                            }
-                                            .onDisappear {
-                                                logger.debug("📱 VIEW LIFECYCLE: Video view \(index) disappeared")
-                                            }
-                                        
-                                        if viewModel.isLoadingMore && index == viewModel.videos.count - 1 {
-                                            ProgressView()
-                                                .scaleEffect(1.5)
-                                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                                .background(Color.black.opacity(0.3))
-                                                .onAppear {
-                                                    logger.debug("⌛️ LOADING STATE: Loading more videos at end of queue")
-                                                }
-                                        }
-                                    }
-                                    .gesture(
-                                        DragGesture()
-                                            .updating($dragState) { _, state, _ in
-                                                state = true
-                                                isGestureActive = true
-                                                logger.debug("🖐️ Drag gesture active")
-                                            }
-                                            .onChanged { value in
-                                                dragOffset = value.translation.height
-                                                logger.debug("👤 USER ACTION: Dragging with offset \(dragOffset)")
-                                            }
-                                            .onEnded { value in
-                                                let height = geometry.size.height
-                                                let threshold = height * 0.3 // 30% of screen height
-                                                
-                                                if abs(value.translation.height) > threshold {
-                                                    if value.translation.height < 0 {
-                                                        // Swipe up
-                                                        if let current = currentIndex,
-                                                           current < viewModel.videos.count - 1 {
-                                                            logger.debug("👤 USER ACTION: Manual swipe up to next video from index \(current)")
-                                                            logger.debug("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
-                                                            withAnimation {
-                                                                currentIndex = current + 1
-                                                            }
-                                                        }
-                                                    } else {
-                                                        // Swipe down
-                                                        if let current = currentIndex,
-                                                           current > 0 {
-                                                            logger.debug("👤 USER ACTION: Manual swipe down to previous video from index \(current)")
-                                                            logger.debug("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
-                                                            withAnimation {
-                                                                currentIndex = current - 1
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                dragOffset = 0
-                                                isGestureActive = false
-                                                logger.debug("🖐️ Drag gesture ended")
-                                            }
-                                    )
-                                    .highPriorityGesture(
-                                        TapGesture()
-                                            .onEnded {
-                                                logger.debug("👤 USER ACTION: Manual play/pause tap on video \(index)")
-                                                videoManager.togglePlayPauseAction(index: index)
-                                            }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    .scrollTargetBehavior(.paging)
-                    .scrollPosition(id: $currentIndex)
-                    .simultaneousGesture(
-                        DragGesture()
-                            .onChanged { _ in }
-                    )
-                    .onChange(of: currentIndex) { oldValue, newValue in
-                        if let index = newValue {
-                            logger.debug("🎯 VIEW STATE: Current index changed from \(oldValue ?? -1) to \(index)")
-                            logger.debug("📊 QUEUE INFO: \(viewModel.videos.count - (index + 1)) videos remaining in queue")
-                            videoManager.pauseAllExcept(index: index)
-                            Task {
-                                await viewModel.loadMoreVideosIfNeeded(currentIndex: index)
-                                // Preload next video if available
-                                if index + 1 < viewModel.videos.count,
-                                   let nextVideoUrl = URL(string: viewModel.videos[index + 1].url) {
-                                    logger.debug("🔄 SYSTEM: Initiating preload for next video (index \(index + 1))")
-                                    await videoManager.preloadVideo(url: nextVideoUrl, forIndex: index + 1)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .ignoresSafeArea()
+            mainContent(geometry)
         }
         .ignoresSafeArea(edges: .all)
         .statusBar(hidden: true)
@@ -163,6 +40,139 @@ struct VideoPlaybackView: View {
         }
         .onDisappear {
             logger.debug("📱 VIEW LIFECYCLE: VideoPlaybackView disappeared")
+        }
+    }
+    
+    @ViewBuilder
+    private func mainContent(_ geometry: GeometryProxy) -> some View {
+        ZStack {
+            if viewModel.isLoading && viewModel.videos.isEmpty {
+                loadingView
+            } else if let error = viewModel.error {
+                errorView(error)
+            } else {
+                videoScrollView(geometry)
+            }
+        }
+        .ignoresSafeArea()
+    }
+    
+    private var loadingView: some View {
+        ProgressView("Loading videos...")
+            .onAppear {
+                logger.debug("⌛️ LOADING STATE: Initial videos loading")
+            }
+    }
+    
+    private func errorView(_ error: Error) -> some View {
+        ErrorView(error: error) {
+            Task {
+                logger.debug("🔄 USER ACTION: Retrying initial video load after error")
+                await viewModel.loadInitialVideos()
+            }
+        }
+    }
+    
+    private func videoScrollView(_ geometry: GeometryProxy) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(spacing: 0) {
+                videoList(geometry)
+            }
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $currentIndex)
+        .simultaneousGesture(
+            DragGesture()
+                .onChanged { _ in }
+        )
+        .onChange(of: currentIndex) { oldValue, newValue in
+            handleIndexChange(oldValue: oldValue, newValue: newValue)
+        }
+    }
+    
+    @ViewBuilder
+    private func videoList(_ geometry: GeometryProxy) -> some View {
+        ForEach(Array(viewModel.videos.enumerated()), id: \.element.id) { index, video in
+            if let url = URL(string: video.url) {
+                videoCell(url: url, index: index, geometry: geometry)
+            }
+        }
+    }
+    
+    private func videoCell(url: URL, index: Int, geometry: GeometryProxy) -> some View {
+        ZStack {
+            VideoPlayerView(url: url, index: index, videoManager: videoManager)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .id(index)
+                .onAppear {
+                    handleVideoAppear(index)
+                }
+                .onDisappear {
+                    logger.debug("📱 VIEW LIFECYCLE: Video view \(index) disappeared")
+                }
+            
+            if viewModel.isLoadingMore && index == viewModel.videos.count - 1 {
+                loadingMoreView
+            }
+        }
+        .gesture(createDragGesture(geometry))
+        .highPriorityGesture(createTapGesture(index))
+    }
+    
+    private var loadingMoreView: some View {
+        ProgressView()
+            .scaleEffect(1.5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.opacity(0.3))
+            .onAppear {
+                logger.debug("⌛️ LOADING STATE: Loading more videos at end of queue")
+            }
+    }
+    
+    private func handleVideoAppear(_ index: Int) {
+        logger.debug("📱 VIEW LIFECYCLE: Video view \(index) appeared")
+        logger.debug("📊 QUEUE INFO: Current queue position \(index + 1) of \(viewModel.videos.count)")
+        if currentIndex == nil {
+            currentIndex = index
+            logger.debug("🎯 VIEW STATE: Setting initial current index to \(index)")
+        }
+    }
+    
+    private func handleIndexChange(oldValue: Int?, newValue: Int?) {
+        if let index = newValue {
+            logger.debug("🎯 VIEW STATE: Current index changed from \(oldValue ?? -1) to \(index)")
+            logger.debug("📊 QUEUE INFO: \(viewModel.videos.count - (index + 1)) videos remaining in queue")
+            
+            // Cleanup old video if it exists
+            if let oldIndex = oldValue {
+                videoManager.cleanupVideo(for: oldIndex)
+            }
+            
+            // Pause all except current
+            videoManager.pauseAllExcept(index: index)
+            
+            Task {
+                await handleVideoPreload(index)
+            }
+        }
+    }
+    
+    private func handleVideoPreload(_ index: Int) async {
+        // Load more videos if needed
+        await viewModel.loadMoreVideosIfNeeded(currentIndex: index)
+        
+        // Preload next video if available
+        if index + 1 < viewModel.videos.count,
+           let nextVideoUrl = URL(string: viewModel.videos[index + 1].url) {
+            logger.debug("🔄 SYSTEM: Initiating preload for next video (index \(index + 1))")
+            await videoManager.preloadVideo(url: nextVideoUrl, forIndex: index + 1)
+        }
+        
+        // Cleanup videos that are too far away (more than 2 positions)
+        let distantPlayers = videoManager.getDistantPlayers(from: index)
+        for playerIndex in distantPlayers {
+            logger.debug("🧹 CLEANUP: Removing distant video at index \(playerIndex)")
+            videoManager.cleanupVideo(for: playerIndex)
         }
     }
     
@@ -192,6 +202,59 @@ struct VideoPlaybackView: View {
                 }
             }
         }
+    }
+    
+    private func createDragGesture(_ geometry: GeometryProxy) -> some Gesture {
+        DragGesture()
+            .updating($dragState) { _, state, _ in
+                state = true
+                isGestureActive = true
+                logger.debug("🖐️ Drag gesture active")
+            }
+            .onChanged { value in
+                dragOffset = value.translation.height
+                logger.debug("👤 USER ACTION: Dragging with offset \(dragOffset)")
+            }
+            .onEnded { value in
+                let height = geometry.size.height
+                let threshold = height * 0.3 // 30% of screen height
+                
+                if abs(value.translation.height) > threshold {
+                    if value.translation.height < 0 {
+                        // Swipe up
+                        if let current = currentIndex,
+                           current < viewModel.videos.count - 1 {
+                            logger.debug("👤 USER ACTION: Manual swipe up to next video from index \(current)")
+                            logger.debug("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
+                            withAnimation {
+                                currentIndex = current + 1
+                            }
+                        }
+                    } else {
+                        // Swipe down
+                        if let current = currentIndex,
+                           current > 0 {
+                            logger.debug("👤 USER ACTION: Manual swipe down to previous video from index \(current)")
+                            logger.debug("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
+                            withAnimation {
+                                currentIndex = current - 1
+                            }
+                        }
+                    }
+                }
+                
+                dragOffset = 0
+                isGestureActive = false
+                logger.debug("🖐️ Drag gesture ended")
+            }
+    }
+    
+    private func createTapGesture(_ index: Int) -> some Gesture {
+        TapGesture()
+            .onEnded {
+                logger.debug("👤 USER ACTION: Manual play/pause tap on video \(index)")
+                videoManager.togglePlayPauseAction(index: index)
+            }
     }
 }
 

@@ -20,6 +20,14 @@ To build and run the app during development:
 - SweetPad extension for VS Code/Cursor
 - Firebase project with Storage enabled
 
+### Hot Reload with InjectionIII
+For a faster development loop, we use [InjectionIII](https://github.com/johnno1962/InjectionIII) to inject Swift code changes directly into the running simulator:
+
+1. Install InjectionIII from the Mac App Store or GitHub.  
+2. Launch it and select your running **LikeThese** simulator process under “Select App.”  
+3. Make sure you're using a **Debug** build.  
+4. Save any Swift file to see the updated code injected automatically.
+
 ## Scripts
 
 This project includes several utility scripts for data management and content generation:

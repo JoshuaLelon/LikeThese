@@ -65,11 +65,8 @@ class FirestoreService {
         }
         networkMonitor.start(queue: DispatchQueue.global())
         
-        // Enable offline persistence
+        // Enable offline persistence with default settings
         let settings = FirestoreSettings()
-        // TODO: Add iOS 16+ support once type conversion issue is resolved
-        settings.isPersistenceEnabled = true
-        settings.cacheSizeBytes = FirestoreCacheSizeUnlimited
         db.settings = settings
     }
     

@@ -47,17 +47,35 @@ class FirestoreService {
     private func setupNetworkMonitoring() {
         networkMonitor.pathUpdateHandler = { [weak self] path in
             if let self {
+                let oldStatus = self.isNetworkAvailable
                 self.isNetworkAvailable = path.status == .satisfied
                 logger.debug("Network status changed: \(path.status == .satisfied ? "Connected" : "Disconnected")")
+                
+                // If network just became available, enable network for Firestore
+                if !oldStatus && self.isNetworkAvailable {
+                    self.db.enableNetwork { error in
+                        if let error = error {
+                            logger.error("❌ Failed to enable network: \(error.localizedDescription)")
+                        } else {
+                            logger.debug("✅ Network enabled for Firestore")
+                        }
+                    }
+                }
             }
         }
         networkMonitor.start(queue: DispatchQueue.global())
+        
+        // Enable offline persistence
+        let settings = FirestoreSettings()
+        settings.isPersistenceEnabled = true
+        settings.cacheSizeBytes = FirestoreCacheSizeUnlimited
+        db.settings = settings
     }
     
     private func handleNetworkError(_ error: Error, attempt: Int) async throws {
         guard attempt < self.maxRetries else {
             logger.error("❌ Max retries reached: \(error.localizedDescription)")
-            throw error
+            throw FirestoreError.maxRetriesReached
         }
         
         if !self.isNetworkAvailable {
@@ -66,6 +84,17 @@ class FirestoreService {
             while !self.isNetworkAvailable {
                 try await Task.sleep(nanoseconds: self.retryDelay)
             }
+            
+            // Re-enable network for Firestore when connection is restored
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                self.db.enableNetwork { error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
         }
         
         logger.debug("🔄 Retrying operation (attempt \(attempt + 1)/\(self.maxRetries))...")
@@ -73,25 +102,62 @@ class FirestoreService {
     }
     
     private func getSignedURL(for path: String) async throws -> URL {
-        let storageRef = storage.reference(withPath: path)
-        let signedURLString = try await storageRef.downloadURL()
-        return signedURLString
+        do {
+            logger.debug("🔄 Getting signed URL for path: \(path)")
+            let storageRef = storage.reference(withPath: path)
+            let signedURLString = try await storageRef.downloadURL()
+            logger.debug("✅ Successfully got signed URL: \(signedURLString)")
+            return signedURLString
+        } catch {
+            logger.error("❌ Failed to get signed URL for path \(path): \(error.localizedDescription)")
+            throw FirestoreError.networkError(error)
+        }
     }
     
     private func validateVideoData(_ data: [String: Any], documentId: String) async throws -> Video {
-        guard let storagePath = data["storagePath"] as? String,
-              !storagePath.isEmpty else {
-            throw FirestoreError.invalidVideoURL("No storage path provided")
+        logger.debug("🔄 Validating video data for document: \(documentId)")
+        logger.debug("📄 Document data: \(data)")
+        
+        // Get video URL - either from direct URL or storage path
+        let videoURL: String
+        if let directURL = data["url"] as? String {
+            videoURL = directURL
+            logger.debug("✅ Using direct video URL")
+        } else if let videoFilePath = data["videoFilePath"] as? String {
+            videoURL = try await getSignedURL(for: videoFilePath).absoluteString
+            logger.debug("✅ Generated signed URL from storage path")
+        } else {
+            logger.error("❌ No video URL or storage path found in document: \(documentId)")
+            throw FirestoreError.invalidVideoData
         }
         
-        let signedURL = try await getSignedURL(for: storagePath)
+        // Get thumbnail URL - either from direct URL or storage path
+        let thumbnailURL: String?
+        if let directURL = data["thumbnailUrl"] as? String {
+            thumbnailURL = directURL
+            logger.debug("✅ Using direct thumbnail URL")
+        } else if let thumbnailPath = data["thumbnailFilePath"] as? String {
+            do {
+                thumbnailURL = try await getSignedURL(for: thumbnailPath).absoluteString
+                logger.debug("✅ Generated signed thumbnail URL from storage path")
+            } catch {
+                logger.error("⚠️ Failed to get thumbnail URL, continuing without thumbnail: \(error.localizedDescription)")
+                thumbnailURL = nil
+            }
+        } else {
+            thumbnailURL = nil
+            logger.debug("ℹ️ No thumbnail URL or path found")
+        }
         
-        return Video(
+        let video = Video(
             id: documentId,
-            url: signedURL.absoluteString,
-            thumbnailUrl: data["thumbnailUrl"] as? String,
+            url: videoURL,
+            thumbnailUrl: thumbnailURL,
             timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
         )
+        
+        logger.debug("✅ Successfully validated video data for: \(documentId)")
+        return video
     }
     
     private func executeWithRetry<T>(maxAttempts: Int = 3, operation: () async throws -> T) async throws -> T {

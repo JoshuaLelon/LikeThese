@@ -13,6 +13,7 @@ class VideoManager: ObservableObject {
     
     @Published private(set) var bufferingStates: [Int: Bool] = [:]
     @Published private(set) var bufferingProgress: [Int: Float] = [:]
+    @Published private(set) var playerStates: [Int: String] = [:] // Track player states
     
     private let preferredBufferDuration: TimeInterval = 10.0 // Buffer 10 seconds ahead
     
@@ -21,22 +22,27 @@ class VideoManager: ObservableObject {
     
     func player(for index: Int) -> AVPlayer {
         if let existingPlayer = players[index] {
+            logger.debug("🎮 Using existing player for index \(index)")
             return existingPlayer
         }
         
         // If we have a preloaded player, use it
         if let preloadedPlayer = preloadedPlayers[index] {
+            logger.debug("🎮 Using preloaded player for index \(index)")
             players[index] = preloadedPlayer
             preloadedPlayers.removeValue(forKey: index)
             setupBuffering(for: preloadedPlayer, at: index)
             setupEndTimeObserver(for: preloadedPlayer, at: index)
+            setupStateObserver(for: preloadedPlayer, at: index)
             return preloadedPlayer
         }
         
+        logger.debug("🎮 Creating new player for index \(index)")
         let player = AVPlayer()
         players[index] = player
         setupBuffering(for: player, at: index)
         setupEndTimeObserver(for: player, at: index)
+        setupStateObserver(for: player, at: index)
         return player
     }
     
@@ -71,11 +77,34 @@ class VideoManager: ObservableObject {
         player.currentItem?.preferredForwardBufferDuration = preferredBufferDuration
     }
     
+    private func setupStateObserver(for player: AVPlayer, at index: Int) {
+        let observer = player.observe(\.timeControlStatus) { [weak self] player, _ in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                let state: String
+                switch player.timeControlStatus {
+                case .playing:
+                    state = "playing"
+                case .paused:
+                    state = "paused"
+                case .waitingToPlayAtSpecifiedRate:
+                    state = "buffering"
+                @unknown default:
+                    state = "unknown"
+                }
+                logger.debug("🎮 Player \(index) state changed to: \(state)")
+                self.playerStates[index] = state
+            }
+        }
+        observers[index] = observer
+    }
+    
     private func setupEndTimeObserver(for player: AVPlayer, at index: Int) {
         // Remove any existing observer
         if let existingObserver = endTimeObservers[index] {
             NotificationCenter.default.removeObserver(existingObserver)
             endTimeObservers.removeValue(forKey: index)
+            logger.debug("🎬 Removed existing end time observer for index \(index)")
         }
         
         // Add new observer
@@ -90,18 +119,24 @@ class VideoManager: ObservableObject {
             // Ensure we're on main thread and player exists
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
-                      let player = self.players[index] else { return }
+                      let player = self.players[index] else {
+                    logger.error("❌ Player not found for index \(index)")
+                    return
+                }
                 
-                // Reset player to beginning
-                player.seek(to: .zero)
-                player.play()
+                // Don't auto-advance if player is paused
+                if player.timeControlStatus == .paused {
+                    logger.debug("⏸️ Player \(index) is paused, not auto-advancing")
+                    return
+                }
                 
-                // Notify completion handler after resetting player
+                logger.debug("⏭️ Auto-advancing from index \(index)")
                 self.onVideoComplete?(index)
             }
         }
         
         endTimeObservers[index] = observer
+        logger.debug("🎬 Added end time observer for index \(index)")
     }
     
     func preloadVideo(url: URL, forIndex index: Int) async {
@@ -131,22 +166,20 @@ class VideoManager: ObservableObject {
     }
     
     func pauseAllExcept(index: Int) {
+        logger.debug("⏸️ Pausing all players except index \(index)")
         players.forEach { key, player in
             if key != index {
                 player.pause()
+                logger.debug("⏸️ Paused player at index \(key)")
             } else {
-                // Only play if not at end
-                if let currentTime = player.currentItem?.currentTime(),
-                   let duration = player.currentItem?.duration,
-                   currentTime >= duration {
-                    player.seek(to: .zero)
-                }
+                logger.debug("▶️ Playing video at index \(key)")
                 player.play()
             }
         }
     }
     
     func cleanupVideo(for index: Int) {
+        logger.debug("🧹 Cleaning up video at index \(index)")
         players[index]?.pause()
         observers[index]?.invalidate()
         observers.removeValue(forKey: index)
@@ -161,6 +194,7 @@ class VideoManager: ObservableObject {
         preloadedPlayers.removeValue(forKey: index)
         bufferingStates.removeValue(forKey: index)
         bufferingProgress.removeValue(forKey: index)
+        playerStates.removeValue(forKey: index)
     }
     
     func cleanupPreloadedVideos() {

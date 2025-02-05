@@ -17,6 +17,7 @@ struct VideoPlaybackView: View {
     @StateObject private var videoManager = VideoManager()
     @State private var currentIndex: Int?
     @State private var dragOffset: CGFloat = 0
+    @State private var isGestureActive = false
     @GestureState private var dragState = false
     
     init() {
@@ -47,8 +48,10 @@ struct VideoPlaybackView: View {
                                             .frame(width: geometry.size.width, height: geometry.size.height)
                                             .id(index)
                                             .onAppear {
+                                                logger.debug("📺 Video view appeared for index \(index)")
                                                 if currentIndex == nil {
                                                     currentIndex = index
+                                                    logger.debug("📺 Setting initial current index to \(index)")
                                                 }
                                             }
                                         
@@ -63,9 +66,12 @@ struct VideoPlaybackView: View {
                                         DragGesture()
                                             .updating($dragState) { _, state, _ in
                                                 state = true
+                                                isGestureActive = true
+                                                logger.debug("🖐️ Drag gesture active")
                                             }
                                             .onChanged { value in
                                                 dragOffset = value.translation.height
+                                                logger.debug("🖐️ Drag offset: \(dragOffset)")
                                             }
                                             .onEnded { value in
                                                 let threshold = geometry.size.height * 0.3
@@ -73,22 +79,27 @@ struct VideoPlaybackView: View {
                                                     withAnimation {
                                                         if value.translation.height < 0 {
                                                             // Swipe up
+                                                            logger.debug("⬆️ Swiping up from index \(currentIndex ?? -1)")
                                                             currentIndex = (currentIndex ?? 0) + 1
                                                             Task {
                                                                 await viewModel.loadMoreVideosIfNeeded(currentIndex: currentIndex ?? 0)
                                                             }
                                                         } else {
                                                             // Swipe down
+                                                            logger.debug("⬇️ Swiping down from index \(currentIndex ?? -1)")
                                                             currentIndex = max(0, (currentIndex ?? 0) - 1)
                                                         }
                                                     }
                                                 }
                                                 dragOffset = 0
+                                                isGestureActive = false
+                                                logger.debug("🖐️ Drag gesture ended")
                                             }
                                     )
                                     .highPriorityGesture(
                                         TapGesture()
                                             .onEnded {
+                                                logger.debug("👆 Tap gesture on index \(index)")
                                                 videoManager.togglePlayPause(index: index)
                                             }
                                     )
@@ -104,6 +115,7 @@ struct VideoPlaybackView: View {
                     )
                     .onChange(of: currentIndex) { oldValue, newValue in
                         if let index = newValue {
+                            logger.debug("📺 Current index changed from \(oldValue ?? -1) to \(index)")
                             videoManager.pauseAllExcept(index: index)
                             Task {
                                 await viewModel.loadMoreVideosIfNeeded(currentIndex: index)
@@ -134,8 +146,10 @@ struct VideoPlaybackView: View {
         logger.debug("🔄 Setting up video completion handler")
         videoManager.onVideoComplete = { [self] index in
             logger.debug("📺 Video at index \(index) completed")
+            
             // Only handle completion if we're not in the middle of a gesture
-            guard !dragState else {
+            guard !isGestureActive else {
+                logger.debug("🖐️ Gesture active, ignoring video completion")
                 return
             }
             
@@ -143,6 +157,7 @@ struct VideoPlaybackView: View {
             DispatchQueue.main.async {
                 withAnimation {
                     if let current = currentIndex, current == index {
+                        logger.debug("⏭️ Auto-advancing to next video from index \(index)")
                         currentIndex = index + 1
                     }
                 }

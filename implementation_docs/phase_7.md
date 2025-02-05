@@ -2,7 +2,6 @@
 ### Checklist
 [x] Track the end of the current video and automatically load the next recommended video from Firestore.  
 [x] Seamlessly replay or skip to next content upon video completion.  
-[ ] Optionally store "autoplay" events in Firestore (for analytics).  
 
 ### Warnings
 - Ensure Firestore read rules permit fetching the next video.

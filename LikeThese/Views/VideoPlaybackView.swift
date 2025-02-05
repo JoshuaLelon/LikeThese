@@ -96,6 +96,11 @@ struct VideoPlaybackView: View {
                             videoManager.pauseAllExcept(index: index)
                             Task {
                                 await viewModel.loadMoreVideosIfNeeded(currentIndex: index)
+                                // Preload next video if available
+                                if index + 1 < viewModel.videos.count,
+                                   let nextVideoUrl = URL(string: viewModel.videos[index + 1].url) {
+                                    await videoManager.preloadVideo(url: nextVideoUrl, forIndex: index + 1)
+                                }
                             }
                         }
                     }

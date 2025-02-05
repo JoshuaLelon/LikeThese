@@ -33,11 +33,20 @@ struct VideoPlayerView: View {
                     videoManager.cleanupVideo(for: index)
                 }
             
-            if isLoading {
-                ProgressView()
-                    .scaleEffect(1.5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black.opacity(0.3))
+            if isLoading || videoManager.bufferingStates[index] == true {
+                ZStack {
+                    Color.black.opacity(0.3)
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        if let progress = videoManager.bufferingProgress[index], !isLoading {
+                            Text("\(Int(progress * 100))%")
+                                .foregroundColor(.white)
+                                .font(.caption)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }

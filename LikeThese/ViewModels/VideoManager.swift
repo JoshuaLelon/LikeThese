@@ -95,25 +95,46 @@ class VideoManager: ObservableObject {
     }
     
     private func setupStateObserver(for player: AVPlayer, at index: Int) {
-        let observer = player.observe(\.timeControlStatus) { [weak self] player, _ in
+        // Use periodic time observer to check state
+        let interval = CMTime(value: 1, timescale: 10) // 0.1 seconds with integer values
+        let observer = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] _ in
             guard let self = self else { return }
-            DispatchQueue.main.async {
-                let state: String
-                switch player.timeControlStatus {
-                case .playing:
-                    state = "playing"
-                case .paused:
-                    state = "paused"
-                case .waitingToPlayAtSpecifiedRate:
-                    state = "buffering"
-                @unknown default:
-                    state = "unknown"
+            
+            let newState = player.timeControlStatus
+            let oldState = self.playerStates[index]
+            
+            let stateStr: String
+            switch newState {
+            case .playing:
+                stateStr = "playing"
+                if oldState != "playing" {
+                    logger.debug("✅ PLAYBACK SUCCESS: Video \(index) successfully started playing")
                 }
-                logger.debug("🎮 PLAYER STATE: Video \(index) state changed to: \(state)")
-                self.playerStates[index] = state
+            case .paused:
+                stateStr = "paused"
+                if oldState != "paused" {
+                    logger.debug("✅ PLAYBACK SUCCESS: Video \(index) successfully paused")
+                }
+            case .waitingToPlayAtSpecifiedRate:
+                stateStr = "buffering"
+                if oldState != "buffering" {
+                    logger.debug("⏳ PLAYBACK WAIT: Video \(index) waiting to play (possibly buffering)")
+                }
+            @unknown default:
+                stateStr = "unknown"
+                if oldState != "unknown" {
+                    logger.debug("⚠️ PLAYBACK WARNING: Video \(index) in unknown state")
+                }
+            }
+            
+            if oldState != stateStr {
+                logger.debug("🎮 PLAYER STATE: Video \(index) state changed: \(oldState ?? "none") -> \(stateStr)")
+                self.playerStates[index] = stateStr
             }
         }
-        observers[index] = observer
+        
+        // Store the observer
+        endTimeObservers[index] = observer
     }
     
     private func setupEndTimeObserver(for player: AVPlayer, at index: Int) {
@@ -171,14 +192,54 @@ class VideoManager: ObservableObject {
     }
     
     func togglePlayPause(index: Int) {
-        guard let player = players[index] else { return }
+        guard let player = players[index] else {
+            logger.error("❌ PLAYBACK ERROR: Cannot toggle play/pause - no player found for index \(index)")
+            return
+        }
         
-        if player.timeControlStatus == .playing {
-            logger.debug("👤 USER ACTION: Manually paused video at index \(index)")
+        let currentState = player.timeControlStatus
+        if currentState == .playing {
+            logger.debug("👤 USER ACTION: Manual pause requested for video \(index)")
             player.pause()
+            
+            // Verify the pause took effect
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                guard let self = self else { return }
+                if player.timeControlStatus != .paused {
+                    logger.error("❌ PLAYBACK ERROR: Video \(index) failed to pause")
+                }
+            }
         } else {
-            logger.debug("👤 USER ACTION: Manually played video at index \(index)")
-            player.play()
+            logger.debug("👤 USER ACTION: Manual play requested for video \(index)")
+            // Check if the item is ready to play
+            if let currentItem = player.currentItem {
+                switch currentItem.status {
+                case .readyToPlay:
+                    logger.debug("✅ PLAYBACK INFO: Video \(index) is ready to play")
+                    player.play()
+                    
+                    // Verify the play took effect
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                        guard let self = self else { return }
+                        if player.timeControlStatus != .playing {
+                            logger.error("❌ PLAYBACK ERROR: Video \(index) failed to start playing")
+                            if let error = currentItem.error {
+                                logger.error("❌ PLAYBACK ERROR: Error details - \(error.localizedDescription)")
+                            }
+                            // Additional debug info
+                            logger.error("❌ PLAYBACK DEBUG: Rate: \(player.rate), Error: \(String(describing: player.error)), Item Error: \(String(describing: currentItem.error))")
+                        }
+                    }
+                case .failed:
+                    logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - item failed: \(currentItem.error?.localizedDescription ?? "unknown error")")
+                case .unknown:
+                    logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - item status unknown")
+                @unknown default:
+                    logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - unexpected item status")
+                }
+            } else {
+                logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - no current item")
+            }
         }
     }
     

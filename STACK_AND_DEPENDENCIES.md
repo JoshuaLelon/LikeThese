@@ -29,7 +29,7 @@ Frontend
 Language: Swift
 Framework: SwiftUI (or UIKit as needed)
 Package Manager: Swift Package Manager
-Build/Run: Sweetpad
+Build/Run: Sweetpad. I'm not aware of the commands to build and run with sweetpad. It uses VS Code configs. If you are aware, let me know.
 
 Backend Services (via Firebase)
 The backend is designed to handle user authentication, data storage, video recommendations, and serverless logic using Firebase. Firebase's serverless nature simplifies infrastructure management while allowing for scalability and rapid development.

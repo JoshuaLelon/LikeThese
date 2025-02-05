@@ -53,4 +53,10 @@ class VideoViewModel: ObservableObject {
             isLoadingMore = false
         }
     }
+    
+    // Add autoplay functionality
+    func appendAutoplayVideo(_ video: Video) {
+        logger.debug("📥 Appending autoplay video: \(video.id)")
+        videos.append(video)
+    }
 } 

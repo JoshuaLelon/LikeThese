@@ -255,29 +255,22 @@ class FirestoreService {
     }
     
     func fetchReplacementVideo(excluding currentVideoId: String) async throws -> Video {
-        var currentAttempt = 0
+        logger.debug("🔄 Fetching replacement video excluding: \(currentVideoId)")
         
-        while true {
-            do {
-                let videosRef = db.collection("videos")
-                let query = videosRef
-                    .whereField("id", isNotEqualTo: currentVideoId)
-                    .limit(to: 1)
-                
-                let snapshot = try await query.getDocuments()
-                
-                guard let document = snapshot.documents.first else {
-                    throw NSError(domain: "FirestoreService", code: -1, 
-                                userInfo: [NSLocalizedDescriptionKey: "No replacement video found"])
-                }
-                
-                let data = document.data()
-                return try await validateVideoData(data, documentId: document.documentID)
-            } catch {
-                try await handleNetworkError(error, attempt: currentAttempt)
-                currentAttempt += 1
-            }
+        let videosRef = db.collection("videos")
+        let query = videosRef
+            .whereField("id", isNotEqualTo: currentVideoId)
+            .limit(to: 1)
+        
+        // Just one attempt
+        let snapshot = try await query.getDocuments()
+        guard let document = snapshot.documents.first else {
+            logger.debug("❌ No replacement video found")
+            throw FirestoreError.emptyVideoCollection
         }
+        
+        let data = document.data()
+        return try await validateVideoData(data, documentId: document.documentID)
     }
     
     func recordSkipInteraction(videoId: String) async {
@@ -298,5 +291,28 @@ class FirestoreService {
             logger.error("❌ Error recording skip interaction: \(error.localizedDescription)")
             print("Error recording skip interaction: \(error)")
         }
+    }
+    
+    // MARK: - Autoplay functionality for Phase 7
+    func fetchNextRecommendedVideo(completion: @escaping (URL?) -> Void) {
+        db.collection("videos")
+          .order(by: "timestamp", descending: true)
+          .limit(to: 1)
+          .getDocuments { snapshot, error in
+              if let error = error {
+                  print("Error fetching next video: \(error.localizedDescription)")
+                  completion(nil)
+                  return
+              }
+              guard let document = snapshot?.documents.first,
+                    let data = document.data()["videoUrl"] as? String,
+                    let videoURL = URL(string: data) else {
+                  print("No more videos found.")
+                  completion(nil)
+                  return
+              }
+              print("Autoplaying next video: \(document.documentID)")
+              completion(videoURL)
+          }
     }
 } 

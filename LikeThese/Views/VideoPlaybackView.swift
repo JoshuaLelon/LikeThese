@@ -1,8 +1,16 @@
 import SwiftUI
 import AVKit
 import os
+import FirebaseFirestore
 
 private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoPlayback")
+
+// Add safe subscript for arrays
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        return indices.contains(index) ? self[index] : nil
+    }
+}
 
 struct VideoPlaybackView: View {
     @StateObject private var viewModel = VideoViewModel()
@@ -94,6 +102,7 @@ struct VideoPlaybackView: View {
                     .onChange(of: currentIndex) { oldValue, newValue in
                         if let index = newValue {
                             videoManager.pauseAllExcept(index: index)
+                            updateVideoObserver()
                             Task {
                                 await viewModel.loadMoreVideosIfNeeded(currentIndex: index)
                                 // Preload next video if available
@@ -115,6 +124,69 @@ struct VideoPlaybackView: View {
             Task {
                 await viewModel.loadInitialVideos()
             }
+            setupVideoCompletion()
+        }
+    }
+    
+    func setupVideoCompletion() {
+        logger.debug("🔄 Setting up video completion handler")
+        // Remove any existing observers first
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
+        
+        // Observe the current player's item
+        if let currentIdx = currentIndex,
+           let player = videoManager.currentPlayer(at: currentIdx) {
+            NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: player.currentItem,
+                queue: .main
+            ) { [weak player] notification in
+                logger.debug("📺 Video playback completed")
+                
+                Task { @MainActor in
+                    if let currentVideoId = viewModel.videos[safe: currentIdx]?.id {
+                        logger.debug("🎥 Current video ID: \(currentVideoId)")
+                        await handleVideoEnd(currentVideoId: currentVideoId)
+                    } else {
+                        logger.error("❌ Could not get current video ID")
+                    }
+                }
+            }
+        }
+    }
+    
+    func handleVideoEnd(currentVideoId: String) async {
+        logger.debug("🔄 Handling video end for ID: \(currentVideoId)")
+        do {
+            let nextVideo = try await FirestoreService.shared.fetchReplacementVideo(excluding: currentVideoId)
+            logger.debug("✅ Fetched next video: \(nextVideo.id)")
+            
+            // Add the new video to the viewModel
+            viewModel.appendAutoplayVideo(nextVideo)
+            // Update the current index to show the new video
+            let newIndex = viewModel.videos.count - 1
+            currentIndex = newIndex
+            
+            // Set up observer for the new video
+            setupVideoCompletion()
+            
+        } catch FirestoreError.emptyVideoCollection {
+            logger.debug("ℹ️ No next video available, replaying current video")
+            if let currentIdx = currentIndex {
+                await videoManager.seekToBeginning(at: currentIdx)
+            }
+        } catch {
+            logger.error("❌ Error fetching next video: \(error.localizedDescription)")
+            if let currentIdx = currentIndex {
+                await videoManager.seekToBeginning(at: currentIdx)
+            }
+        }
+    }
+    
+    // Add this to handle player changes
+    private func updateVideoObserver() {
+        Task { @MainActor in
+            setupVideoCompletion()
         }
     }
 }

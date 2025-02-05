@@ -111,4 +111,17 @@ class VideoManager: ObservableObject {
     func cleanupPreloadedVideos() {
         preloadedPlayers.removeAll()
     }
+    
+    // Add public access to current player
+    func currentPlayer(at index: Int) -> AVPlayer? {
+        return players[index]
+    }
+    
+    // Add seek to beginning helper
+    func seekToBeginning(at index: Int) async {
+        if let player = players[index] {
+            await player.seek(to: CMTime.zero)
+            player.play()
+        }
+    }
 } 

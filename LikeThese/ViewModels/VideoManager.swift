@@ -53,24 +53,38 @@ class VideoManager: ObservableObject {
         // Set preferred buffer duration
         player.automaticallyWaitsToMinimizeStalling = true
         
-        // Observe buffering state
-        let observer = player.observe(\.currentItem?.isPlaybackLikelyToKeepUp) { [weak self] player, _ in
+        // Observe buffering state with proper key paths
+        let observer = player.observe(\.currentItem?.status) { [weak self] player, _ in
             guard let self = self else { return }
-            let isBuffering = !(player.currentItem?.isPlaybackLikelyToKeepUp ?? true)
-            DispatchQueue.main.async {
-                self.bufferingStates[index] = isBuffering
-                logger.debug("🎮 BUFFER STATE: Video \(index) buffering: \(isBuffering)")
-                
-                if let duration = player.currentItem?.duration.seconds,
-                   let currentTime = player.currentItem?.currentTime().seconds {
-                    let remaining = duration - currentTime
-                    logger.debug("⏱️ PLAYBACK INFO: Video \(index) at \(String(format: "%.1f", currentTime))s/\(String(format: "%.1f", duration))s (\(String(format: "%.1f", remaining))s remaining)")
+            if let currentItem = player.currentItem {
+                let isBuffering = currentItem.status != .readyToPlay
+                Task { @MainActor in
+                    self.bufferingStates[index] = isBuffering
+                    
+                    if currentItem.status == .failed {
+                        logger.error("❌ PLAYBACK ERROR: Video \(index) failed to load: \(String(describing: currentItem.error))")
+                        // Attempt retry after network error
+                        await self.retryLoadingIfNeeded(for: index)
+                    } else {
+                        logger.debug("🎮 BUFFER STATE: Video \(index) buffering: \(isBuffering)")
+                        // Use CMTime directly for time values
+                        let duration = currentItem.duration
+                        let currentTime = currentItem.currentTime()
+                        if duration.isValid && currentTime.isValid {
+                            let durationSeconds = CMTimeGetSeconds(duration)
+                            let currentSeconds = CMTimeGetSeconds(currentTime)
+                            if durationSeconds.isFinite && currentSeconds.isFinite {
+                                let remaining = durationSeconds - currentSeconds
+                                logger.debug("⏱️ PLAYBACK INFO: Video \(index) at \(String(format: "%.1f", currentSeconds))s/\(String(format: "%.1f", durationSeconds))s (\(String(format: "%.1f", remaining))s remaining)")
+                            }
+                        }
+                    }
                 }
             }
         }
         observers[index] = observer
         
-        // Monitor buffering progress
+        // Store time observer reference
         let timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC)), queue: .main) { [weak self] _ in
             guard let self = self,
                   let currentItem = player.currentItem else { return }
@@ -79,19 +93,50 @@ class VideoManager: ObservableObject {
             guard let firstRange = loadedRanges.first as? CMTimeRange else { return }
             
             let bufferedDuration = CMTimeGetSeconds(firstRange.duration)
-            let progress = Float(bufferedDuration / self.preferredBufferDuration)
-            self.bufferingProgress[index] = min(progress, 1.0)
-            logger.debug("📊 BUFFER PROGRESS: Video \(index) buffered \(String(format: "%.1f", bufferedDuration))s (\(String(format: "%.0f", progress * 100))%)")
-        }
-        
-        // Monitor for playback errors
-        let errorObserver = player.observe(\.currentItem?.error) { [weak self] player, _ in
-            if let error = player.currentItem?.error {
-                logger.error("❌ PLAYBACK ERROR: Video \(index) encountered error: \(error.localizedDescription)")
+            if bufferedDuration.isFinite {
+                let progress = Float(bufferedDuration / self.preferredBufferDuration)
+                self.bufferingProgress[index] = min(progress, 1.0)
+                logger.debug("📊 BUFFER PROGRESS: Video \(index) buffered \(String(format: "%.1f", bufferedDuration))s (\(String(format: "%.0f", progress * 100))%)")
             }
         }
+        endTimeObservers[index] = timeObserver
         
-        observers[index] = observer
+        // Store error observer reference
+        let errorObserver = player.observe(\.currentItem?.error) { [weak self] player, _ in
+            guard let self = self else { return }
+            if let error = player.currentItem?.error {
+                logger.error("❌ PLAYBACK ERROR: Video \(index) encountered error: \(error.localizedDescription)")
+                Task { @MainActor in
+                    await self.retryLoadingIfNeeded(for: index)
+                }
+            }
+        }
+        observers[index] = errorObserver
+    }
+    
+    private func retryLoadingIfNeeded(for index: Int) async {
+        guard let player = players[index],
+              let currentItem = player.currentItem,
+              currentItem.status == .failed else {
+            return
+        }
+        
+        logger.debug("🔄 SYSTEM: Attempting to retry loading video \(index)")
+        
+        // Wait a bit before retrying
+        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+        
+        if let asset = currentItem.asset as? AVURLAsset {
+            do {
+                let newPlayerItem = try await videoCacheService.preloadVideo(url: asset.url)
+                await MainActor.run {
+                    player.replaceCurrentItem(with: newPlayerItem)
+                    logger.debug("✅ SYSTEM: Successfully reloaded video \(index)")
+                }
+            } catch {
+                logger.error("❌ SYSTEM ERROR: Failed to reload video \(index): \(error.localizedDescription)")
+            }
+        }
     }
     
     private func setupStateObserver(for player: AVPlayer, at index: Int) {
@@ -191,7 +236,15 @@ class VideoManager: ObservableObject {
         }
     }
     
-    func togglePlayPause(index: Int) {
+    // Non-async wrapper for togglePlayPause
+    func togglePlayPauseAction(index: Int) {
+        Task { @MainActor in
+            await togglePlayPause(index: index)
+        }
+    }
+
+    @MainActor
+    private func togglePlayPause(index: Int) async {
         guard let player = players[index] else {
             logger.error("❌ PLAYBACK ERROR: Cannot toggle play/pause - no player found for index \(index)")
             return
@@ -202,38 +255,47 @@ class VideoManager: ObservableObject {
             logger.debug("👤 USER ACTION: Manual pause requested for video \(index)")
             player.pause()
             
-            // Verify the pause took effect
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                guard let self = self else { return }
-                if player.timeControlStatus != .paused {
-                    logger.error("❌ PLAYBACK ERROR: Video \(index) failed to pause")
-                }
+            // Verify the pause took effect and handle failure
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            if player.timeControlStatus != .paused {
+                logger.error("❌ PLAYBACK ERROR: Video \(index) failed to pause")
+                // Try pause again with rate setting
+                player.rate = 0
+                player.pause()
             }
         } else {
             logger.debug("👤 USER ACTION: Manual play requested for video \(index)")
-            // Check if the item is ready to play
             if let currentItem = player.currentItem {
                 switch currentItem.status {
                 case .readyToPlay:
                     logger.debug("✅ PLAYBACK INFO: Video \(index) is ready to play")
+                    // Ensure proper playback rate and play
+                    player.rate = 1.0
                     player.play()
                     
-                    // Verify the play took effect
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                        guard let self = self else { return }
-                        if player.timeControlStatus != .playing {
-                            logger.error("❌ PLAYBACK ERROR: Video \(index) failed to start playing")
-                            if let error = currentItem.error {
-                                logger.error("❌ PLAYBACK ERROR: Error details - \(error.localizedDescription)")
-                            }
-                            // Additional debug info
-                            logger.error("❌ PLAYBACK DEBUG: Rate: \(player.rate), Error: \(String(describing: player.error)), Item Error: \(String(describing: currentItem.error))")
-                        }
+                    // Verify play state and handle failure
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    if player.timeControlStatus != .playing {
+                        logger.error("❌ PLAYBACK ERROR: Video \(index) failed to start playing")
+                        // Try alternative play method
+                        let currentTime = currentItem.currentTime()
+                        try? await player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                        player.rate = 1.0
+                        player.play()
                     }
                 case .failed:
                     logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - item failed: \(currentItem.error?.localizedDescription ?? "unknown error")")
+                    // Attempt to recover
+                    await retryLoadingIfNeeded(for: index)
                 case .unknown:
                     logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - item status unknown")
+                    // Wait for ready state
+                    let observer = currentItem.observe(\.status) { item, _ in
+                        if item.status == .readyToPlay {
+                            player.play()
+                        }
+                    }
+                    observers[index] = observer
                 @unknown default:
                     logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - unexpected item status")
                 }

@@ -106,7 +106,7 @@ struct VideoPlaybackView: View {
                                         TapGesture()
                                             .onEnded {
                                                 logger.debug("👤 USER ACTION: Manual play/pause tap on video \(index)")
-                                                videoManager.togglePlayPause(index: index)
+                                                videoManager.togglePlayPauseAction(index: index)
                                             }
                                     )
                                 }

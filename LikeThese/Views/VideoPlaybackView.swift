@@ -38,6 +38,11 @@ struct VideoPlaybackView: View {
                                         VideoPlayerView(url: url, index: index, videoManager: videoManager)
                                             .frame(width: geometry.size.width, height: geometry.size.height)
                                             .id(index)
+                                            .onAppear {
+                                                if currentIndex == nil {
+                                                    currentIndex = index
+                                                }
+                                            }
                                         
                                         if viewModel.isLoadingMore && index == viewModel.videos.count - 1 {
                                             ProgressView()

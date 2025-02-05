@@ -7,7 +7,7 @@ private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "Vide
 
 class VideoCacheService {
     static let shared = VideoCacheService()
-    private let cache = NSCache<NSString, AVPlayerItem>()
+    private let cache = NSCache<NSString, AVURLAsset>()
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
     
@@ -25,22 +25,23 @@ class VideoCacheService {
     
     func cachedPlayerItem(for url: URL) -> AVPlayerItem? {
         let key = url.absoluteString as NSString
-        return cache.object(forKey: key)
+        guard let asset = cache.object(forKey: key) else { return nil }
+        return AVPlayerItem(asset: asset)
     }
     
-    func cachePlayerItem(_ playerItem: AVPlayerItem, for url: URL) {
+    func cacheAsset(_ asset: AVURLAsset, for url: URL) {
         let key = url.absoluteString as NSString
-        cache.setObject(playerItem, forKey: key)
-        logger.debug("📥 Cached player item for URL: \(url)")
+        cache.setObject(asset, forKey: key)
+        logger.debug("📥 Cached asset for URL: \(url)")
     }
     
     func preloadVideo(url: URL) async throws -> AVPlayerItem {
         let cacheKey = url.absoluteString as NSString
         
         // Check memory cache first
-        if let cachedItem = cache.object(forKey: cacheKey) {
+        if let cachedAsset = cache.object(forKey: cacheKey) {
             logger.debug("✅ Found cached video in memory for URL: \(url)")
-            return cachedItem
+            return AVPlayerItem(asset: cachedAsset)
         }
         
         // Generate local cache path
@@ -52,7 +53,7 @@ class VideoCacheService {
             logger.debug("✅ Found cached video on disk: \(localURL.path)")
             let asset = AVURLAsset(url: localURL)
             let playerItem = AVPlayerItem(asset: asset)
-            cachePlayerItem(playerItem, for: url)
+            cacheAsset(asset, for: url)
             return playerItem
         }
         
@@ -93,7 +94,7 @@ class VideoCacheService {
             
             logger.debug("✅ Downloaded and cached video at: \(localURL.path)")
             
-            // Create player item from local file
+            // Create asset from local file
             let asset = AVURLAsset(url: localURL)
             let playerItem = AVPlayerItem(asset: asset)
             
@@ -108,7 +109,7 @@ class VideoCacheService {
                 }
             }
             
-            cachePlayerItem(playerItem, for: url)
+            cacheAsset(asset, for: url)
             return playerItem
             
         } catch {

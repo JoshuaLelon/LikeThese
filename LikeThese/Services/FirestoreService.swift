@@ -257,20 +257,42 @@ class FirestoreService {
     func fetchReplacementVideo(excluding currentVideoId: String) async throws -> Video {
         logger.debug("🔄 Fetching replacement video excluding: \(currentVideoId)")
         
-        let videosRef = db.collection("videos")
-        let query = videosRef
-            .whereField("id", isNotEqualTo: currentVideoId)
-            .limit(to: 1)
-        
-        // Just one attempt
-        let snapshot = try await query.getDocuments()
-        guard let document = snapshot.documents.first else {
-            logger.debug("❌ No replacement video found")
-            throw FirestoreError.emptyVideoCollection
+        // Check auth state
+        guard Auth.auth().currentUser != nil else {
+            logger.error("❌ User not authenticated")
+            throw FirestoreError.networkError(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"]))
         }
         
-        let data = document.data()
-        return try await validateVideoData(data, documentId: document.documentID)
+        // Check network state
+        guard isNetworkAvailable else {
+            logger.error("❌ Network unavailable")
+            throw FirestoreError.networkError(NSError(domain: "FirestoreService", code: -2, userInfo: [NSLocalizedDescriptionKey: "Network unavailable"]))
+        }
+        
+        // First get all videos ordered by timestamp
+        let videosRef = db.collection("videos")
+            .order(by: "timestamp", descending: true)
+            .limit(to: 10)  // Limit to avoid loading too many
+        
+        do {
+            let snapshot = try await videosRef.getDocuments()
+            // Filter out the current video client-side
+            let filteredDocs = snapshot.documents.filter { $0.documentID != currentVideoId }
+            
+            guard let document = filteredDocs.first else {
+                logger.debug("❌ No replacement video found")
+                throw FirestoreError.emptyVideoCollection
+            }
+            
+            let data = document.data()
+            return try await validateVideoData(data, documentId: document.documentID)
+        } catch let error as NSError {
+            logger.error("❌ Error fetching replacement video: \(error.localizedDescription)")
+            if error.domain.contains("Firebase") || error.domain == NSPOSIXErrorDomain {
+                throw FirestoreError.networkError(error)
+            }
+            throw error
+        }
     }
     
     func recordSkipInteraction(videoId: String) async {

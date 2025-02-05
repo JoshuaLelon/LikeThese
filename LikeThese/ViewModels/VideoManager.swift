@@ -86,10 +86,17 @@ class VideoManager: ObservableObject {
         ) { [weak self] _ in
             guard let self = self else { return }
             logger.debug("🎬 Video at index \(index) finished playing")
+            
             // Ensure we're on main thread and player exists
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
-                      self.players[index] != nil else { return }
+                      let player = self.players[index] else { return }
+                
+                // Reset player to beginning
+                player.seek(to: .zero)
+                player.play()
+                
+                // Notify completion handler after resetting player
                 self.onVideoComplete?(index)
             }
         }
@@ -128,8 +135,12 @@ class VideoManager: ObservableObject {
             if key != index {
                 player.pause()
             } else {
-                // Make sure the current video plays
-                player.seek(to: .zero)
+                // Only play if not at end
+                if let currentTime = player.currentItem?.currentTime(),
+                   let duration = player.currentItem?.duration,
+                   currentTime >= duration {
+                    player.seek(to: .zero)
+                }
                 player.play()
             }
         }

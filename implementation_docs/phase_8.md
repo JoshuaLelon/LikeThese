@@ -1,7 +1,7 @@
 ## Phase 8: Previously Watched (Swipe Down)
 ### Checklist
-[ ] Maintain a stack or queue that records the user's watch history.  
-[ ] On swipe down, pop or shift the stack to reload the previously watched video.  
+[x] Maintain a stack or queue that records the user's watch history.  
+[x] On swipe down, pop or shift the stack to reload the previously watched video.  
 [ ] Display the previous video quickly from local cache or Firestore.  
 
 ### File Structure Tree once implemented

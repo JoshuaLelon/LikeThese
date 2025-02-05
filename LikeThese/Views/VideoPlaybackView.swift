@@ -61,6 +61,9 @@ struct VideoPlaybackView: View {
                                     }
                                     .gesture(
                                         DragGesture()
+                                            .updating($dragState) { _, state, _ in
+                                                state = true
+                                            }
                                             .onChanged { value in
                                                 dragOffset = value.translation.height
                                             }
@@ -129,8 +132,13 @@ struct VideoPlaybackView: View {
     
     func setupVideoCompletion() {
         logger.debug("🔄 Setting up video completion handler")
-        videoManager.onVideoComplete = { index in
+        videoManager.onVideoComplete = { [self] index in
             logger.debug("📺 Video at index \(index) completed")
+            // Only handle completion if we're not in the middle of a gesture
+            guard !dragState else {
+                return
+            }
+            
             // Simply increment the index on the main thread
             DispatchQueue.main.async {
                 withAnimation {

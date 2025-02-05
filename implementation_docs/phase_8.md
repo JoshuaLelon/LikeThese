@@ -1,5 +1,5 @@
 [x] I want to have comprehensive logging. Specifically, i want all pauses, unpauses, plays, swipe ups, and swipe downs to be logged, both by the app and by the user. I also want all video events (a video is paused or played) and all swipes (e.g. the video changes, the next video is loaded, the previous video is loaded) to be logged.
-[IP] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.
+[PROGRESS] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.
 [ ] when I log in, I want the app to show a loading screen until ALL the videos are loaded
 [ ] when any video finishes playing, I want the app to show a "swipe up event" and then the next video to start playing automatically 
 

@@ -25,6 +25,11 @@ struct VideoPlayerView: View {
                                     player.replaceCurrentItem(with: playerItem)
                                     player.play()
                                     logger.debug("✅ VIDEO PLAYER: Started playback for index \(index)")
+                                } else if player.currentItem?.status == .failed {
+                                    // Try to recover failed item
+                                    player.replaceCurrentItem(with: playerItem)
+                                    player.play()
+                                    logger.debug("🔄 VIDEO PLAYER: Recovered failed item for index \(index)")
                                 } else {
                                     logger.debug("ℹ️ VIDEO PLAYER: Player already has item for index \(index)")
                                 }
@@ -38,7 +43,7 @@ struct VideoPlayerView: View {
                 }
                 .onDisappear {
                     logger.debug("📱 VIDEO PLAYER: View disappeared for index \(index)")
-                    videoManager.cleanupVideo(for: index)
+                    // Don't cleanup immediately, let VideoManager handle cleanup of distant players
                 }
             
             if isLoading || videoManager.bufferingStates[index] == true {

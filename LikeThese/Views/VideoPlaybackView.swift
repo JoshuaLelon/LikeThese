@@ -19,6 +19,7 @@ struct VideoPlaybackView: View {
     @State private var dragOffset: CGFloat = 0
     @State private var isGestureActive = false
     @GestureState private var dragState = false
+    @State private var isInitialLoad = true
     
     init() {
         logger.debug("📱 VideoPlaybackView initialized")
@@ -35,11 +36,18 @@ struct VideoPlaybackView: View {
             logger.debug("📊 INITIAL STATE: \(viewModel.videos.count) videos in initial queue")
             Task {
                 await viewModel.loadInitialVideos()
+                if isInitialLoad {
+                    // Set initial index only on first load
+                    currentIndex = 0
+                    isInitialLoad = false
+                    logger.debug("🎯 VIEW STATE: Setting initial index to 0 on first load")
+                }
             }
             setupVideoCompletion()
         }
         .onDisappear {
             logger.debug("📱 VIEW LIFECYCLE: VideoPlaybackView disappeared")
+            // Don't reset isInitialLoad here to maintain state across login/logout
         }
     }
     
@@ -132,9 +140,18 @@ struct VideoPlaybackView: View {
     private func handleVideoAppear(_ index: Int) {
         logger.debug("📱 VIEW LIFECYCLE: Video view \(index) appeared")
         logger.debug("📊 QUEUE INFO: Current queue position \(index + 1) of \(viewModel.videos.count)")
-        if currentIndex == nil {
+        
+        // Only set currentIndex if it's nil and we're not in initial load
+        if currentIndex == nil && !isInitialLoad {
             currentIndex = index
-            logger.debug("🎯 VIEW STATE: Setting initial current index to \(index)")
+            logger.debug("🎯 VIEW STATE: Setting current index to \(index)")
+        }
+        
+        // Ensure video is ready to play
+        Task {
+            if let url = URL(string: viewModel.videos[index].url) {
+                await videoManager.preloadVideo(url: url, forIndex: index)
+            }
         }
     }
     

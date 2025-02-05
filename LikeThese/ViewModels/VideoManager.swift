@@ -16,6 +16,7 @@ class VideoManager: NSObject, ObservableObject {
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
     private var retryQueue: [(index: Int, url: URL)] = []
+    private var playerUrls: [Int: URL] = [:] // Track URLs for recovery
     
     @Published private(set) var bufferingStates: [Int: Bool] = [:]
     @Published private(set) var bufferingProgress: [Int: Float] = [:]
@@ -73,6 +74,30 @@ class VideoManager: NSObject, ObservableObject {
             logger.debug("🎮 PLAYER ACCESS: Using existing player for index \(index)")
             if let currentItem = existingPlayer.currentItem {
                 logger.debug("📊 PLAYER STATUS: Video \(index) ready to play: \(currentItem.status == .readyToPlay)")
+                if currentItem.status == .failed {
+                    logger.debug("⚠️ PLAYER WARNING: Player item failed for index \(index), will attempt recovery")
+                    // Recovery will happen in VideoPlayerView
+                }
+            } else {
+                logger.debug("⚠️ PLAYER WARNING: Player exists but has no item for index \(index)")
+                // Try to recover the player item
+                if let item = playerItems[index] {
+                    logger.debug("🔄 PLAYER RECOVERY: Restoring player item for index \(index)")
+                    existingPlayer.replaceCurrentItem(with: item)
+                } else if let url = playerUrls[index] {
+                    // If we have the URL but no item, try to recreate the item
+                    Task {
+                        do {
+                            let playerItem = try await videoCacheService.preloadVideo(url: url)
+                            await MainActor.run {
+                                existingPlayer.replaceCurrentItem(with: playerItem)
+                                logger.debug("🔄 PLAYER RECOVERY: Recreated player item for index \(index)")
+                            }
+                        } catch {
+                            logger.error("❌ PLAYER ERROR: Failed to recover player item for index \(index)")
+                        }
+                    }
+                }
             }
             return existingPlayer
         }
@@ -82,6 +107,12 @@ class VideoManager: NSObject, ObservableObject {
             logger.debug("🎮 Using preloaded player for index \(index)")
             players[index] = preloadedPlayer
             preloadedPlayers.removeValue(forKey: index)
+            
+            // Store the player item for potential recovery
+            if let item = preloadedPlayer.currentItem {
+                playerItems[index] = item
+                logger.debug("📦 PLAYER SETUP: Stored player item for index \(index)")
+            }
             
             // Only setup observers if they don't exist
             if observers[index] == nil {
@@ -254,7 +285,9 @@ class VideoManager: NSObject, ObservableObject {
         logger.debug("🎬 SYSTEM: Added end time observer for index \(index)")
     }
     
+    @MainActor
     func preloadVideo(url: URL, forIndex index: Int) async {
+        playerUrls[index] = url // Store URL for recovery
         logger.debug("🔄 SYSTEM: Preloading video for index \(index)")
         
         guard isNetworkAvailable else {
@@ -412,6 +445,14 @@ class VideoManager: NSObject, ObservableObject {
     func cleanupVideo(for index: Int) {
         logger.debug("🧹 CLEANUP: Starting cleanup for video \(index)")
         
+        // Store the player item before cleanup if it exists
+        if let player = players[index], let item = player.currentItem {
+            playerItems[index] = item
+            logger.debug("🔄 CLEANUP: Stored player item for index \(index) for potential recovery")
+        }
+        
+        // Don't remove playerUrls[index] to allow for recovery
+        
         // Cleanup observers first
         cleanupObservers(for: index)
         
@@ -420,8 +461,8 @@ class VideoManager: NSObject, ObservableObject {
             // Pause playback
             player.pause()
             
-            // Remove the player's item to cancel any pending loads
-            player.replaceCurrentItem(with: nil)
+            // Don't remove the player item immediately to allow for recovery during swipes
+            // player.replaceCurrentItem(with: nil)
             
             // Remove player
             players.removeValue(forKey: index)
@@ -432,11 +473,6 @@ class VideoManager: NSObject, ObservableObject {
         if preloadedPlayers.removeValue(forKey: index) != nil {
             logger.debug("🧹 CLEANUP: Removed preloaded player for index \(index)")
         }
-        
-        // Clear all observer references for this index
-        timeObservers.removeValue(forKey: index)
-        observers.removeValue(forKey: index)
-        endTimeObservers.removeValue(forKey: index)
         
         logger.debug("✨ CLEANUP: Completed cleanup for video \(index)")
     }
@@ -486,11 +522,14 @@ class VideoManager: NSObject, ObservableObject {
         
         // Clear player item reference
         playerItems[index] = nil
+        
+        // Don't clear playerUrls[index] to allow for recovery
         logger.debug("✨ CLEANUP: Completed observer cleanup for index \(index)")
     }
     
     // Add public method to check distant players
     func getDistantPlayers(from currentIndex: Int) -> [Int] {
-        return players.keys.filter { abs($0 - currentIndex) > 2 }
+        // Only consider players more than 1 position away to keep adjacent videos ready
+        return players.keys.filter { abs($0 - currentIndex) > 1 }
     }
 } 

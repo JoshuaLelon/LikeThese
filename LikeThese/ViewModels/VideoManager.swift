@@ -1,6 +1,7 @@
 import Foundation
 import AVKit
 import os
+import Network
 
 private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoManager")
 
@@ -8,17 +9,61 @@ class VideoManager: ObservableObject {
     private var players: [Int: AVPlayer] = [:]
     private var preloadedPlayers: [Int: AVPlayer] = [:]
     private var observers: [Int: NSKeyValueObservation] = [:]
+    private var timeObservers: [Int: (player: AVPlayer, observer: Any)] = [:] // Track which observer belongs to which player
     private var endTimeObservers: [Int: Any] = [:]  // Store end-time observers
     private let videoCacheService = VideoCacheService.shared
+    private let networkMonitor = NWPathMonitor()
+    private var isNetworkAvailable = true
+    private var retryQueue: [(index: Int, url: URL)] = []
     
     @Published private(set) var bufferingStates: [Int: Bool] = [:]
     @Published private(set) var bufferingProgress: [Int: Float] = [:]
     @Published private(set) var playerStates: [Int: String] = [:] // Track player states
+    @Published private(set) var networkState: String = "unknown"
     
     private let preferredBufferDuration: TimeInterval = 10.0 // Buffer 10 seconds ahead
     
     // Add completion handler
     var onVideoComplete: ((Int) -> Void)?
+    
+    init() {
+        setupNetworkMonitoring()
+    }
+    
+    private func setupNetworkMonitoring() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            guard let self = self else { return }
+            Task { @MainActor in
+                self.isNetworkAvailable = path.status == .satisfied
+                self.networkState = path.status == .satisfied ? "connected" : "disconnected"
+                
+                if path.status == .satisfied {
+                    logger.debug("🌐 NETWORK: Connection restored")
+                    await self.retryFailedLoads()
+                } else {
+                    logger.debug("🌐 NETWORK: Connection lost")
+                }
+            }
+        }
+        networkMonitor.start(queue: DispatchQueue.global(qos: .utility))
+    }
+    
+    private func retryFailedLoads() async {
+        logger.debug("🔄 NETWORK: Retrying \(self.retryQueue.count) failed loads")
+        let itemsToRetry = self.retryQueue
+        self.retryQueue.removeAll()
+        
+        for item in itemsToRetry {
+            do {
+                logger.debug("🔄 RETRY: Attempting to load video for index \(item.index)")
+                await preloadVideo(url: item.url, forIndex: item.index)
+            } catch {
+                logger.error("❌ RETRY ERROR: Failed to reload video \(item.index): \(error.localizedDescription)")
+                // Add back to queue if still failing
+                self.retryQueue.append(item)
+            }
+        }
+    }
     
     func player(for index: Int) -> AVPlayer {
         if let existingPlayer = players[index] {
@@ -50,41 +95,13 @@ class VideoManager: ObservableObject {
     }
     
     private func setupBuffering(for player: AVPlayer, at index: Int) {
+        // Cleanup any existing observers first
+        cleanupObservers(for: index)
+        
         // Set preferred buffer duration
         player.automaticallyWaitsToMinimizeStalling = true
         
-        // Observe buffering state with proper key paths
-        let observer = player.observe(\.currentItem?.status) { [weak self] player, _ in
-            guard let self = self else { return }
-            if let currentItem = player.currentItem {
-                let isBuffering = currentItem.status != .readyToPlay
-                Task { @MainActor in
-                    self.bufferingStates[index] = isBuffering
-                    
-                    if currentItem.status == .failed {
-                        logger.error("❌ PLAYBACK ERROR: Video \(index) failed to load: \(String(describing: currentItem.error))")
-                        // Attempt retry after network error
-                        await self.retryLoadingIfNeeded(for: index)
-                    } else {
-                        logger.debug("🎮 BUFFER STATE: Video \(index) buffering: \(isBuffering)")
-                        // Use CMTime directly for time values
-                        let duration = currentItem.duration
-                        let currentTime = currentItem.currentTime()
-                        if duration.isValid && currentTime.isValid {
-                            let durationSeconds = CMTimeGetSeconds(duration)
-                            let currentSeconds = CMTimeGetSeconds(currentTime)
-                            if durationSeconds.isFinite && currentSeconds.isFinite {
-                                let remaining = durationSeconds - currentSeconds
-                                logger.debug("⏱️ PLAYBACK INFO: Video \(index) at \(String(format: "%.1f", currentSeconds))s/\(String(format: "%.1f", durationSeconds))s (\(String(format: "%.1f", remaining))s remaining)")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        observers[index] = observer
-        
-        // Store time observer reference
+        // Store time observer with its player reference
         let timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC)), queue: .main) { [weak self] _ in
             guard let self = self,
                   let currentItem = player.currentItem else { return }
@@ -99,9 +116,38 @@ class VideoManager: ObservableObject {
                 logger.debug("📊 BUFFER PROGRESS: Video \(index) buffered \(String(format: "%.1f", bufferedDuration))s (\(String(format: "%.0f", progress * 100))%)")
             }
         }
-        endTimeObservers[index] = timeObserver
+        timeObservers[index] = (player: player, observer: timeObserver)
         
-        // Store error observer reference
+        // Observe buffering state
+        let bufferingObserver = player.observe(\.currentItem?.status) { [weak self] player, _ in
+            guard let self = self else { return }
+            if let currentItem = player.currentItem {
+                let isBuffering = currentItem.status != .readyToPlay
+                Task { @MainActor in
+                    self.bufferingStates[index] = isBuffering
+                    
+                    if currentItem.status == .failed {
+                        logger.error("❌ PLAYBACK ERROR: Video \(index) failed to load: \(String(describing: currentItem.error))")
+                        await self.retryLoadingIfNeeded(for: index)
+                    } else {
+                        logger.debug("🎮 BUFFER STATE: Video \(index) buffering: \(isBuffering)")
+                        let duration = currentItem.duration
+                        let currentTime = currentItem.currentTime()
+                        if duration.isValid && currentTime.isValid {
+                            let durationSeconds = CMTimeGetSeconds(duration)
+                            let currentSeconds = CMTimeGetSeconds(currentTime)
+                            if durationSeconds.isFinite && currentSeconds.isFinite {
+                                let remaining = durationSeconds - currentSeconds
+                                logger.debug("⏱️ PLAYBACK INFO: Video \(index) at \(String(format: "%.1f", currentSeconds))s/\(String(format: "%.1f", durationSeconds))s (\(String(format: "%.1f", remaining))s remaining)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        observers[index] = bufferingObserver
+        
+        // Store error observer
         let errorObserver = player.observe(\.currentItem?.error) { [weak self] player, _ in
             guard let self = self else { return }
             if let error = player.currentItem?.error {
@@ -183,12 +229,8 @@ class VideoManager: ObservableObject {
     }
     
     private func setupEndTimeObserver(for player: AVPlayer, at index: Int) {
-        // Remove any existing observer
-        if let existingObserver = endTimeObservers[index] {
-            NotificationCenter.default.removeObserver(existingObserver)
-            endTimeObservers.removeValue(forKey: index)
-            logger.debug("🧹 SYSTEM: Removed existing end time observer for index \(index)")
-        }
+        // Remove any existing observer first
+        cleanupObservers(for: index)
         
         // Add new observer
         let observer = NotificationCenter.default.addObserver(
@@ -199,9 +241,8 @@ class VideoManager: ObservableObject {
             guard let self = self else { return }
             logger.debug("🎬 SYSTEM: Video at index \(index) reached end")
             
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self,
-                      let player = self.players[index] else {
+            Task { @MainActor in
+                guard let player = self.players[index] else {
                     logger.error("❌ SYSTEM ERROR: Player not found for index \(index)")
                     return
                 }
@@ -222,8 +263,28 @@ class VideoManager: ObservableObject {
     
     func preloadVideo(url: URL, forIndex index: Int) async {
         logger.debug("🔄 SYSTEM: Preloading video for index \(index)")
+        
+        guard isNetworkAvailable else {
+            logger.debug("🌐 NETWORK: No connection, queueing video \(index) for later")
+            retryQueue.append((index: index, url: url))
+            return
+        }
+        
         do {
             let playerItem = try await videoCacheService.preloadVideo(url: url)
+            
+            // Load essential asset properties first
+            let asset = playerItem.asset
+            let assetKeys: [String] = ["tracks", "duration", "playable"]
+            try await asset.loadValuesAsynchronously(forKeys: assetKeys)
+            
+            // Then load video track properties if available
+            if let videoTrack = try await asset.loadTracks(withMediaType: .video).first {
+                let trackKeys: [String] = ["naturalSize", "preferredTransform"]
+                try await videoTrack.loadValuesAsynchronously(forKeys: trackKeys)
+                logger.debug("✅ SYSTEM: Successfully loaded video track properties for index \(index)")
+            }
+            
             await MainActor.run {
                 let player = AVPlayer(playerItem: playerItem)
                 preloadedPlayers[index] = player
@@ -233,6 +294,10 @@ class VideoManager: ObservableObject {
             }
         } catch {
             logger.error("❌ SYSTEM ERROR: Failed to preload video: \(error.localizedDescription)")
+            if isNetworkAvailable {
+                // Only queue for retry if it wasn't a network issue
+                retryQueue.append((index: index, url: url))
+            }
         }
     }
     
@@ -320,26 +385,30 @@ class VideoManager: ObservableObject {
     
     func cleanupVideo(for index: Int) {
         logger.debug("🧹 CLEANUP: Starting cleanup for video \(index)")
+        
+        // Cleanup observers first
+        cleanupObservers(for: index)
+        
+        // Then cleanup player
         if let player = players[index] {
             if let currentTime = player.currentItem?.currentTime().seconds {
                 logger.debug("⏱️ CLEANUP INFO: Video \(index) stopped at \(String(format: "%.1f", currentTime))s")
             }
-        }
-        players[index]?.pause()
-        observers[index]?.invalidate()
-        observers.removeValue(forKey: index)
-        
-        // Remove end time observer
-        if let observer = endTimeObservers[index] {
-            NotificationCenter.default.removeObserver(observer)
-            endTimeObservers.removeValue(forKey: index)
+            
+            // Pause playback
+            player.pause()
+            
+            // Remove the player's item to cancel any pending loads
+            player.replaceCurrentItem(with: nil)
         }
         
+        // Remove player and state
         players.removeValue(forKey: index)
         preloadedPlayers.removeValue(forKey: index)
         bufferingStates.removeValue(forKey: index)
         bufferingProgress.removeValue(forKey: index)
         playerStates.removeValue(forKey: index)
+        
         logger.debug("✨ CLEANUP: Completed cleanup for video \(index)")
     }
     
@@ -360,5 +429,20 @@ class VideoManager: ObservableObject {
             player.play()
             logger.debug("▶️ PLAYBACK ACTION: Restarted video \(index) from beginning")
         }
+    }
+    
+    private func cleanupObservers(for index: Int) {
+        // Cleanup KVO observers
+        observers[index]?.invalidate()
+        observers.removeValue(forKey: index)
+        
+        // Cleanup time observers using the correct player instance
+        if let timeObserverPair = timeObservers[index] {
+            timeObserverPair.player.removeTimeObserver(timeObserverPair.observer)
+            timeObservers.removeValue(forKey: index)
+            logger.debug("🧹 CLEANUP: Removed time observer for index \(index)")
+        }
+        
+        logger.debug("🧹 CLEANUP: Removed all observers for index \(index)")
     }
 } 

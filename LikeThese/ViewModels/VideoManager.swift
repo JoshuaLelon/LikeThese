@@ -22,7 +22,10 @@ class VideoManager: ObservableObject {
     
     func player(for index: Int) -> AVPlayer {
         if let existingPlayer = players[index] {
-            logger.debug("🎮 Using existing player for index \(index)")
+            logger.debug("🎮 PLAYER ACCESS: Using existing player for index \(index)")
+            if let currentItem = existingPlayer.currentItem {
+                logger.debug("📊 PLAYER STATUS: Video \(index) ready to play: \(currentItem.status == .readyToPlay)")
+            }
             return existingPlayer
         }
         
@@ -56,6 +59,13 @@ class VideoManager: ObservableObject {
             let isBuffering = !(player.currentItem?.isPlaybackLikelyToKeepUp ?? true)
             DispatchQueue.main.async {
                 self.bufferingStates[index] = isBuffering
+                logger.debug("🎮 BUFFER STATE: Video \(index) buffering: \(isBuffering)")
+                
+                if let duration = player.currentItem?.duration.seconds,
+                   let currentTime = player.currentItem?.currentTime().seconds {
+                    let remaining = duration - currentTime
+                    logger.debug("⏱️ PLAYBACK INFO: Video \(index) at \(String(format: "%.1f", currentTime))s/\(String(format: "%.1f", duration))s (\(String(format: "%.1f", remaining))s remaining)")
+                }
             }
         }
         observers[index] = observer
@@ -71,10 +81,17 @@ class VideoManager: ObservableObject {
             let bufferedDuration = CMTimeGetSeconds(firstRange.duration)
             let progress = Float(bufferedDuration / self.preferredBufferDuration)
             self.bufferingProgress[index] = min(progress, 1.0)
+            logger.debug("📊 BUFFER PROGRESS: Video \(index) buffered \(String(format: "%.1f", bufferedDuration))s (\(String(format: "%.0f", progress * 100))%)")
         }
         
-        // Store time observer for cleanup
-        player.currentItem?.preferredForwardBufferDuration = preferredBufferDuration
+        // Monitor for playback errors
+        let errorObserver = player.observe(\.currentItem?.error) { [weak self] player, _ in
+            if let error = player.currentItem?.error {
+                logger.error("❌ PLAYBACK ERROR: Video \(index) encountered error: \(error.localizedDescription)")
+            }
+        }
+        
+        observers[index] = observer
     }
     
     private func setupStateObserver(for player: AVPlayer, at index: Int) {
@@ -92,7 +109,7 @@ class VideoManager: ObservableObject {
                 @unknown default:
                     state = "unknown"
                 }
-                logger.debug("🎮 Player \(index) state changed to: \(state)")
+                logger.debug("🎮 PLAYER STATE: Video \(index) state changed to: \(state)")
                 self.playerStates[index] = state
             }
         }
@@ -104,7 +121,7 @@ class VideoManager: ObservableObject {
         if let existingObserver = endTimeObservers[index] {
             NotificationCenter.default.removeObserver(existingObserver)
             endTimeObservers.removeValue(forKey: index)
-            logger.debug("🎬 Removed existing end time observer for index \(index)")
+            logger.debug("🧹 SYSTEM: Removed existing end time observer for index \(index)")
         }
         
         // Add new observer
@@ -114,33 +131,31 @@ class VideoManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
-            logger.debug("🎬 Video at index \(index) finished playing")
+            logger.debug("🎬 SYSTEM: Video at index \(index) reached end")
             
-            // Ensure we're on main thread and player exists
             DispatchQueue.main.async { [weak self] in
                 guard let self = self,
                       let player = self.players[index] else {
-                    logger.error("❌ Player not found for index \(index)")
+                    logger.error("❌ SYSTEM ERROR: Player not found for index \(index)")
                     return
                 }
                 
-                // Don't auto-advance if player is paused
                 if player.timeControlStatus == .paused {
-                    logger.debug("⏸️ Player \(index) is paused, not auto-advancing")
+                    logger.debug("⏸️ SYSTEM: Player \(index) is paused, skipping auto-advance")
                     return
                 }
                 
-                logger.debug("⏭️ Auto-advancing from index \(index)")
+                logger.debug("🤖 AUTO ACTION: Triggering auto-advance from index \(index)")
                 self.onVideoComplete?(index)
             }
         }
         
         endTimeObservers[index] = observer
-        logger.debug("🎬 Added end time observer for index \(index)")
+        logger.debug("🎬 SYSTEM: Added end time observer for index \(index)")
     }
     
     func preloadVideo(url: URL, forIndex index: Int) async {
-        logger.debug("🔄 Preloading video for index \(index)")
+        logger.debug("🔄 SYSTEM: Preloading video for index \(index)")
         do {
             let playerItem = try await videoCacheService.preloadVideo(url: url)
             await MainActor.run {
@@ -148,10 +163,10 @@ class VideoManager: ObservableObject {
                 preloadedPlayers[index] = player
                 setupBuffering(for: player, at: index)
                 setupEndTimeObserver(for: player, at: index)
-                logger.debug("✅ Successfully preloaded video for index \(index)")
+                logger.debug("✅ SYSTEM: Successfully preloaded video for index \(index)")
             }
         } catch {
-            logger.error("❌ Failed to preload video: \(error.localizedDescription)")
+            logger.error("❌ SYSTEM ERROR: Failed to preload video: \(error.localizedDescription)")
         }
     }
     
@@ -159,27 +174,34 @@ class VideoManager: ObservableObject {
         guard let player = players[index] else { return }
         
         if player.timeControlStatus == .playing {
+            logger.debug("👤 USER ACTION: Manually paused video at index \(index)")
             player.pause()
         } else {
+            logger.debug("👤 USER ACTION: Manually played video at index \(index)")
             player.play()
         }
     }
     
     func pauseAllExcept(index: Int) {
-        logger.debug("⏸️ Pausing all players except index \(index)")
+        logger.debug("🔄 SYSTEM: Pausing all players except index \(index)")
         players.forEach { key, player in
             if key != index {
                 player.pause()
-                logger.debug("⏸️ Paused player at index \(key)")
+                logger.debug("🔄 SYSTEM: Paused player at index \(key)")
             } else {
-                logger.debug("▶️ Playing video at index \(key)")
+                logger.debug("🔄 SYSTEM: Playing video at index \(key)")
                 player.play()
             }
         }
     }
     
     func cleanupVideo(for index: Int) {
-        logger.debug("🧹 Cleaning up video at index \(index)")
+        logger.debug("🧹 CLEANUP: Starting cleanup for video \(index)")
+        if let player = players[index] {
+            if let currentTime = player.currentItem?.currentTime().seconds {
+                logger.debug("⏱️ CLEANUP INFO: Video \(index) stopped at \(String(format: "%.1f", currentTime))s")
+            }
+        }
         players[index]?.pause()
         observers[index]?.invalidate()
         observers.removeValue(forKey: index)
@@ -195,6 +217,7 @@ class VideoManager: ObservableObject {
         bufferingStates.removeValue(forKey: index)
         bufferingProgress.removeValue(forKey: index)
         playerStates.removeValue(forKey: index)
+        logger.debug("✨ CLEANUP: Completed cleanup for video \(index)")
     }
     
     func cleanupPreloadedVideos() {
@@ -209,8 +232,10 @@ class VideoManager: ObservableObject {
     // Add seek to beginning helper
     func seekToBeginning(at index: Int) async {
         if let player = players[index] {
+            logger.debug("⏪ PLAYBACK ACTION: Seeking video \(index) to beginning")
             await player.seek(to: CMTime.zero)
             player.play()
+            logger.debug("▶️ PLAYBACK ACTION: Restarted video \(index) from beginning")
         }
     }
 } 

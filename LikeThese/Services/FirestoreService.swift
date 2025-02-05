@@ -67,6 +67,7 @@ class FirestoreService {
         
         // Enable offline persistence
         let settings = FirestoreSettings()
+        // TODO: Add iOS 16+ support once type conversion issue is resolved
         settings.isPersistenceEnabled = true
         settings.cacheSizeBytes = FirestoreCacheSizeUnlimited
         db.settings = settings
@@ -162,13 +163,11 @@ class FirestoreService {
     
     private func executeWithRetry<T>(maxAttempts: Int = 3, operation: () async throws -> T) async throws -> T {
         var currentAttempt = 0
-        var lastError: Error?
         
         while currentAttempt < maxAttempts {
             do {
                 return try await operation()
             } catch let error as NSError {
-                lastError = error
                 logger.error("❌ Operation failed (attempt \(currentAttempt + 1)/\(maxAttempts)): \(error.localizedDescription)")
                 
                 // Retry on network errors or Firebase errors

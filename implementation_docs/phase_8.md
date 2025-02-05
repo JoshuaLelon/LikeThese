@@ -1,9 +1,8 @@
-## Phase 8: Previously Watched (Swipe Down)
+[x] I want to have comprehensive logging. Specifically, i want all pauses, unpauses, plays, swipe ups, and swipe downs to be logged, both by the app and by the user. I also want all video events (a video is paused or played) and all swipes (e.g. the video changes, the next video is loaded, the previous video is loaded) to be logged.
+[ ] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.
+[ ] when I log in, I want the app to show a loading screen until ALL the videos are loaded
+[ ] when any video finishes playing, I want the app to show a "swipe up event" and then the next video to start playing automatically 
 
-### Checklist
-[x] Maintain a stack or queue that records the user's watch history.  
-[x] On swipe down, pop or shift the stack to reload the previously watched video.  
-[PROGRESS] Display the previous video quickly from local cache or Firestore.  
 
 ### Implementation Status
 
@@ -206,16 +205,13 @@ The implementation now includes:
 - Improved bounds checking
 
 ### Warnings
-- ⚠️ Need to monitor network bandwidth usage during video preloading
-- ⚠️ Consider implementing video quality adaptation based on network conditions
-- ⚠️ Watch for potential race conditions during rapid swipes
-- ⚠️ Monitor memory usage with multiple preloaded videos
-- ⚠️ Consider implementing analytics for swipe patterns
-- ⚠️ Need to test edge cases with slow network conditions
-- ⚠️ Consider implementing retry mechanism for failed video loads
-- ⚠️ Monitor AVPlayer memory usage during transitions
-- ⚠️ Consider implementing video quality selection based on network conditions
-- ⚠️ SwiftUI type-checking issues may require future refactoring when compiler improves
+⚠️ Need to monitor network bandwidth usage during video preloading
+⚠️ Consider implementing video quality adaptation based on network conditions
+⚠️ Watch for potential race conditions during rapid swipes
+⚠️ Monitor memory usage with multiple preloaded videos
+⚠️ Consider implementing analytics for swipe patterns
+⚠️ Need to test edge cases with slow network conditions
+⚠️ Consider implementing retry mechanism for failed video loads
 
 ### Known Issues
 1. Type Checking Performance
@@ -826,6 +822,34 @@ These appear in files using the enhanced logging system but do not affect functi
 - Other views using the logging system
 
 For detailed documentation about these issues, see `LOGGING.md`.
+
+### Logging Implementation Details
+#### User Actions
+- Play/Pause events with timestamps and progress
+- Swipe gestures with distance and velocity metrics
+- Manual navigation between videos
+- Retry attempts and error recovery actions
+
+#### Video Events
+- Playback state changes (playing, paused, buffering)
+- Video completion and auto-advance
+- Loading and preloading states
+- Buffering progress and network state
+- Current time and duration tracking
+
+#### System Events
+- Resource cleanup and memory management
+- Network connectivity changes
+- Error states and recovery attempts
+- Component lifecycle events
+
+#### Performance Metrics
+- Buffer progress tracking
+- Video loading times
+- Network state changes
+- Memory usage patterns
+
+All logs follow the standardized format defined in LOGGING.md and include relevant context such as video indices, timestamps, and state information.
 
 
 

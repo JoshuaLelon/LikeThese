@@ -1,108 +1,170 @@
-# LikeThese Logging Documentation
+# LikeThese Logging System
 
 ## Overview
-This document outlines the logging system used throughout the LikeThese app. The logging system is designed to provide comprehensive debugging information, track user interactions, and monitor system performance.
+The LikeThese app uses a comprehensive logging system built on Apple's unified logging system. Each component has a dedicated logger with specific subsystem and category:
 
-## Logging System Architecture
-
-### Logger Setup
-Each component uses Apple's unified logging system with a dedicated subsystem and category:
 ```swift
-import os
 private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "ComponentName")
 ```
 
-### Subsystems and Categories
-- **VideoPlayback**: Main video playback interface
-- **VideoPlayer**: Individual video player components
-- **VideoManager**: Video state and resource management
-- **FirestoreService**: Firebase interactions
-- **VideoCacheService**: Video caching operations
-- **AuthService**: Authentication operations
-
 ## Log Categories and Emojis
 
-### User Interface (📱)
-- View lifecycle events
-- UI state changes
+### View Lifecycle (📱)
+- View initialization and appearance
+- Component mounting/unmounting
 - Layout updates
-- User interface interactions
+```swift
+logger.debug("📱 VIEW LIFECYCLE: VideoPlaybackView initialized")
+logger.debug("📱 VIEW LIFECYCLE: Video view \(index) appeared")
+```
 
-### Loading and Progress (⌛️)
-- Content loading states
-- Progress updates
-- Initialization events
-- Resource loading
+### Loading States (⌛️)
+- Content loading progress
+- Resource initialization
+- Queue management
+```swift
+logger.debug("⌛️ LOADING STATE: Initial videos loading")
+logger.debug("⌛️ LOADING STATE: Loading more videos at end of queue")
+```
 
 ### User Actions (👤)
-- Gesture interactions
-- Button taps
-- Navigation actions
-- User preferences
+- Play/Pause interactions
+- Swipe gestures with metrics
+- Manual navigation
+```swift
+logger.debug("👤 USER ACTION: Manual pause requested for video \(index)")
+logger.debug("👤 USER ACTION: Dragging with offset \(dragOffset)")
+```
 
 ### System Operations (🔄)
-- Background tasks
-- Resource management
-- Cache operations
-- State synchronization
+- State management
+- Resource handling
+- Cleanup operations
+```swift
+logger.debug("🔄 SYSTEM: Preloading video for index \(index)")
+logger.debug("🔄 SYSTEM: Setting up video completion handler")
+```
 
 ### Network Status (🌐)
 - Connectivity changes
-- API requests
-- Download status
-- Network quality
+- Download progress
+- Retry operations
+```swift
+logger.debug("🌐 NETWORK: Connection restored")
+logger.debug("🌐 NETWORK: No connection, queueing video \(index) for later")
+```
 
 ### Playback Status (🎮)
-- Video player states
-- Playback controls
-- Media loading
-- Player configuration
+- Player state changes
+- Buffering updates
+- Video transitions
+```swift
+logger.debug("🎮 PLAYER STATE: Video \(index) state changed: \(oldState) -> \(newState)")
+```
 
 ### Performance Metrics (📊)
 - Buffer progress
-- Queue management
-- Resource usage
-- Timing measurements
+- Playback statistics
+- Queue position
+```swift
+logger.debug("📊 BUFFER PROGRESS: Video \(index) buffered \(String(format: "%.1f", bufferedDuration))s")
+logger.debug("📊 USER STATS: Video \(index) paused at \(String(format: "%.1f", currentTime))s")
+```
 
 ### Resource Management (🧹)
-- Cleanup operations
-- Memory management
-- Resource deallocation
-- Cache maintenance
+- Memory cleanup
+- Observer removal
+- Cache management
+```swift
+logger.debug("🧹 CLEANUP: Starting cleanup for video \(index)")
+logger.debug("🧹 CLEANUP: Removed all observers for index \(index)")
+```
 
 ### Success Events (✅)
 - Operation completion
-- Resource loading
 - State transitions
-- Validation success
+- Resource loading
+```swift
+logger.debug("✅ SYSTEM: Successfully preloaded video for index \(index)")
+logger.debug("✅ PLAYBACK SUCCESS: Video \(index) successfully started playing")
+```
 
 ### Errors and Warnings (❌/⚠️)
 - Operation failures
 - Resource issues
-- State conflicts
-- System warnings
+- Recovery attempts
+```swift
+logger.error("❌ PLAYBACK ERROR: Video \(index) failed to load: \(error.localizedDescription)")
+logger.debug("⚠️ GESTURE STATE: Active gesture detected, cancelling auto-advance")
+```
 
 ### Gesture Tracking (🖐️)
-- Touch interactions
-- Swipe events
+- Touch events
+- Swipe metrics
 - Gesture states
-- Input handling
+```swift
+logger.debug("🖐️ Drag gesture active")
+logger.debug("🖐️ Drag gesture ended")
+```
 
 ### Automated Actions (🤖)
+- Auto-advance
 - System-initiated events
-- Scheduled tasks
-- Auto-advance operations
-- Background processes
+- Background tasks
+```swift
+logger.debug("🤖 AUTO ACTION: Video \(index) finished playing")
+logger.debug("🤖 AUTO ACTION: Auto-advancing to video \(nextIndex)")
+```
 
 ## Log Format
-
-### Standard Format
 ```
-{timestamp} {app}[{process}:{thread}] {emoji} {CATEGORY}: {description}
+{timestamp} {app}[{process}] {emoji} {CATEGORY}: {message}
 ```
 
-### Example Log Analysis
+Example:
 ```
+2024-02-05 10:15:23.456 LikeThese[12345] 👤 USER ACTION: Manual swipe up to next video from index 2
+```
+
+## Implementation Details
+
+### VideoManager Logging
+- Comprehensive player state tracking
+- Buffering progress monitoring
+- Resource lifecycle logging
+- Error handling and recovery
+
+### VideoPlaybackView Logging
+- User interaction tracking
+- Gesture metrics
+- View lifecycle events
+- Queue management
+
+### Performance Monitoring
+- Buffer progress tracking
+- Network state monitoring
+- Memory usage patterns
+- Loading time metrics
+
+## Best Practices
+1. Always include context (video index, state, etc.)
+2. Use appropriate emoji categories
+3. Log both start and completion of operations
+4. Include relevant metrics when available
+5. Keep messages concise but informative
+6. Use appropriate log levels (debug/error)
+
+## Log Levels
+
+### Debug
+Used for general flow information and non-critical events
+```swift
+logger.debug("📱 VIEW LIFECYCLE: Video view \(index) appeared")
+```
+
+### Error
+Used for operation failures and critical issues
+```swift
 2025-02-05 11:52:13.441 LikeThese[87814:41473712] 🎮 PLAYER STATE: Video 2 state changed: paused -> playing
 ```
 Components:

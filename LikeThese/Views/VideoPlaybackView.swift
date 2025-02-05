@@ -82,21 +82,33 @@ struct VideoPlaybackView: View {
                                                 logger.debug("👤 USER ACTION: Dragging with offset \(dragOffset)")
                                             }
                                             .onEnded { value in
-                                                let threshold = geometry.size.height * 0.3
+                                                let height = geometry.size.height
+                                                let threshold = height * 0.3 // 30% of screen height
+                                                
                                                 if abs(value.translation.height) > threshold {
-                                                    withAnimation {
-                                                        if value.translation.height < 0 {
-                                                            logger.debug("👤 USER ACTION: Manual swipe up to next video from index \(currentIndex ?? -1)")
-                                                            currentIndex = (currentIndex ?? 0) + 1
-                                                            Task {
-                                                                await viewModel.loadMoreVideosIfNeeded(currentIndex: currentIndex ?? 0)
+                                                    if value.translation.height < 0 {
+                                                        // Swipe up
+                                                        if let current = currentIndex,
+                                                           current < viewModel.videos.count - 1 {
+                                                            logger.debug("👤 USER ACTION: Manual swipe up to next video from index \(current)")
+                                                            logger.debug("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
+                                                            withAnimation {
+                                                                currentIndex = current + 1
                                                             }
-                                                        } else {
-                                                            logger.debug("👤 USER ACTION: Manual swipe down to previous video from index \(currentIndex ?? -1)")
-                                                            currentIndex = max(0, (currentIndex ?? 0) - 1)
+                                                        }
+                                                    } else {
+                                                        // Swipe down
+                                                        if let current = currentIndex,
+                                                           current > 0 {
+                                                            logger.debug("👤 USER ACTION: Manual swipe down to previous video from index \(current)")
+                                                            logger.debug("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
+                                                            withAnimation {
+                                                                currentIndex = current - 1
+                                                            }
                                                         }
                                                     }
                                                 }
+                                                
                                                 dragOffset = 0
                                                 isGestureActive = false
                                                 logger.debug("🖐️ Drag gesture ended")

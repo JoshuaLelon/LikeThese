@@ -101,11 +101,21 @@ class VideoManager: ObservableObject {
         // Set preferred buffer duration
         player.automaticallyWaitsToMinimizeStalling = true
         
-        // Store time observer with its player reference
-        let timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC)), queue: .main) { [weak self] _ in
+        // Add periodic time observer for tracking playback progress
+        let interval = CMTime(seconds: 1.0, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        let timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self = self,
                   let currentItem = player.currentItem else { return }
             
+            let currentTime = CMTimeGetSeconds(time)
+            let duration = CMTimeGetSeconds(currentItem.duration)
+            
+            // Log progress every 10 seconds or when significant events occur
+            if Int(currentTime) % 10 == 0 || currentTime == duration {
+                logger.debug("📊 PLAYBACK PROGRESS: Video \(index) at \(String(format: "%.1f", currentTime))s/\(String(format: "%.1f", duration))s (\(String(format: "%.1f%%", currentTime/duration * 100))% complete)")
+            }
+            
+            // Check buffering state
             let loadedRanges = currentItem.loadedTimeRanges
             guard let firstRange = loadedRanges.first as? CMTimeRange else { return }
             
@@ -229,31 +239,24 @@ class VideoManager: ObservableObject {
     }
     
     private func setupEndTimeObserver(for player: AVPlayer, at index: Int) {
-        // Remove any existing observer first
-        cleanupObservers(for: index)
-        
-        // Add new observer
-        let observer = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: player.currentItem,
-            queue: .main
-        ) { [weak self] _ in
+        // Add observer for video end
+        let observer = player.addBoundaryTimeObserver(forTimes: [NSValue(time: player.currentItem?.duration ?? .zero)],
+                                                    queue: .main) { [weak self] in
             guard let self = self else { return }
             logger.debug("🎬 SYSTEM: Video at index \(index) reached end")
             
-            Task { @MainActor in
-                guard let player = self.players[index] else {
-                    logger.error("❌ SYSTEM ERROR: Player not found for index \(index)")
-                    return
-                }
-                
-                if player.timeControlStatus == .paused {
-                    logger.debug("⏸️ SYSTEM: Player \(index) is paused, skipping auto-advance")
-                    return
-                }
-                
+            // Log final video stats
+            if let currentItem = player.currentItem {
+                let duration = CMTimeGetSeconds(currentItem.duration)
+                logger.debug("📊 VIDEO COMPLETION: Video \(index) completed after \(String(format: "%.1f", duration))s")
+            }
+            
+            // Check if video should auto-advance
+            if player.timeControlStatus == .playing {
                 logger.debug("🤖 AUTO ACTION: Triggering auto-advance from index \(index)")
                 self.onVideoComplete?(index)
+            } else {
+                logger.debug("⏸️ SYSTEM: Player \(index) is paused, skipping auto-advance")
             }
         }
         
@@ -318,6 +321,12 @@ class VideoManager: ObservableObject {
         let currentState = player.timeControlStatus
         if currentState == .playing {
             logger.debug("👤 USER ACTION: Manual pause requested for video \(index)")
+            // Add detailed user action logging
+            if let currentItem = player.currentItem {
+                let currentTime = CMTimeGetSeconds(currentItem.currentTime())
+                let duration = CMTimeGetSeconds(currentItem.duration)
+                logger.debug("📊 USER STATS: Video \(index) paused at \(String(format: "%.1f", currentTime))s/\(String(format: "%.1f", duration))s (\(String(format: "%.1f%%", currentTime/duration * 100))% watched)")
+            }
             player.pause()
             
             // Verify the pause took effect and handle failure
@@ -330,6 +339,13 @@ class VideoManager: ObservableObject {
             }
         } else {
             logger.debug("👤 USER ACTION: Manual play requested for video \(index)")
+            // Add detailed user action logging
+            if let currentItem = player.currentItem {
+                let currentTime = CMTimeGetSeconds(currentItem.currentTime())
+                let duration = CMTimeGetSeconds(currentItem.duration)
+                logger.debug("📊 USER STATS: Video \(index) resumed at \(String(format: "%.1f", currentTime))s/\(String(format: "%.1f", duration))s (\(String(format: "%.1f%%", currentTime/duration * 100))% watched)")
+            }
+            
             if let currentItem = player.currentItem {
                 switch currentItem.status {
                 case .readyToPlay:

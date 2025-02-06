@@ -14,27 +14,38 @@ extension Array {
 
 struct VideoPlaybackView: View {
     @StateObject private var viewModel = VideoViewModel()
-    @StateObject private var videoManager = VideoManager()
+    @ObservedObject var videoManager: VideoManager
     @State private var currentIndex: Int?
     @State private var dragOffset: CGFloat = 0
     @State private var isGestureActive = false
     @GestureState private var dragState = false
     @State private var autoAdvanceOffset: CGFloat = 0
+    @State private var showError = false
+    @State private var errorMessage: String?
+    @Environment(\.dismiss) private var dismiss
     
     let initialVideo: Video
     let initialIndex: Int
     let videos: [Video]
     
-    init(initialVideo: Video, initialIndex: Int, videos: [Video]) {
+    init(initialVideo: Video, initialIndex: Int, videos: [Video], videoManager: VideoManager) {
         self.initialVideo = initialVideo
         self.initialIndex = initialIndex
         self.videos = videos
+        self.videoManager = videoManager
         logger.info("📱 VideoPlaybackView initialized with video: \(initialVideo.id) at index: \(initialIndex), total videos: \(videos.count)")
     }
     
     var body: some View {
         GeometryReader { geometry in
             mainContent(geometry)
+        }
+        .alert("Video Error", isPresented: $showError) {
+            Button("Go Back") {
+                dismiss()
+            }
+        } message: {
+            Text(errorMessage ?? "Failed to load video")
         }
         .task {
             // Initialize state and preload immediately
@@ -67,6 +78,11 @@ struct VideoPlaybackView: View {
                     }
                 } catch {
                     logger.error("❌ Failed to preload initial video: \(error.localizedDescription)")
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                        showError = true
+                        videoManager.cleanup(context: .error)
+                    }
                 }
             }
         }
@@ -74,11 +90,7 @@ struct VideoPlaybackView: View {
             // Only cleanup if we're actually leaving the view hierarchy
             logger.info("📱 VIEW LIFECYCLE: VideoPlaybackView disappeared - cleaning up resources")
             if let currentIdx = currentIndex {
-                videoManager.pauseAllExcept(index: currentIdx)
-                // Prepare for transition to grid view (using -1 as grid view index)
-                videoManager.prepareForTransition(from: currentIdx, to: -1)
-                // Finish transition immediately as we're leaving
-                videoManager.finishTransition(at: -1)
+                videoManager.cleanup(context: .dismissal)
             }
         }
         .ignoresSafeArea(edges: .all)
@@ -173,22 +185,17 @@ struct VideoPlaybackView: View {
     }
     
     private func handleIndexChange(oldValue: Int?, newValue: Int?) {
-        if let index = newValue {
-            logger.info("🎯 Current index changed from \(oldValue ?? -1) to \(index)")
-            logger.info("📊 \(viewModel.videos.count - (index + 1)) videos remaining in queue")
+        if let oldIndex = oldValue, let newIndex = newValue {
+            logger.info("🎯 Current index changed from \(oldIndex) to \(newIndex)")
+            logger.info("📊 \(viewModel.videos.count - (newIndex + 1)) videos remaining in queue")
             
-            // Prepare for transition if we have an old index
-            if let oldIndex = oldValue {
-                videoManager.prepareForTransition(from: oldIndex, to: index)
-            }
+            videoManager.cleanup(context: .navigation(from: oldIndex, to: newIndex))
             
             // Pause all except current
-            videoManager.pauseAllExcept(index: index)
+            videoManager.pauseAllExcept(index: newIndex)
             
             Task {
-                await handleVideoPreload(index)
-                // Finish transition after preloading
-                videoManager.finishTransition(at: index)
+                await handleVideoPreload(newIndex)
             }
         }
     }
@@ -320,7 +327,8 @@ struct VideoPlaybackView_Previews: PreviewProvider {
                 timestamp: Timestamp(date: Date())
             ),
             initialIndex: 0,
-            videos: []
+            videos: [],
+            videoManager: VideoManager()
         )
     }
 } 

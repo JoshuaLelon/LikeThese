@@ -20,6 +20,12 @@ private struct KeepRange {
     }
 }
 
+enum CleanupContext {
+    case navigation(from: Int, to: Int)
+    case dismissal
+    case error
+}
+
 @MainActor
 class VideoManager: NSObject, ObservableObject {
     private var players: [Int: AVPlayer] = [:]
@@ -483,26 +489,53 @@ class VideoManager: NSObject, ObservableObject {
         }
     }
     
-    func cleanupVideo(for index: Int) {
-        switch transitionState {
-        case .transitioning:
-            logger.info("⏳ CLEANUP: Deferring cleanup for index \(index) during transition")
-            pendingCleanup.insert(index)
+    func cleanup(context: CleanupContext) {
+        logger.info("🧹 CLEANUP: Starting cleanup with context: \(String(describing: context))")
+        
+        switch context {
+        case .navigation(let fromIndex, let toIndex):
+            // Keep videos in range of both indices
+            let keepRange = KeepRange(
+                start: max(0, min(fromIndex, toIndex) - 1),
+                end: max(fromIndex, toIndex) + 1
+            )
             
-        case .playing:
-            if let range = keepRange, range.contains(index) {
-                logger.info("🛡️ PROTECTION: Skipping cleanup for protected video at index \(index)")
-                return
+            // Only cleanup videos outside the keep range
+            for index in players.keys {
+                if !keepRange.contains(index) {
+                    performCleanup(for: index)
+                }
             }
-            performCleanup(for: index)
             
-        case .none:
-            performCleanup(for: index)
+            logger.info("🛡️ NAVIGATION CLEANUP: Keeping videos in range \(keepRange.start) to \(keepRange.end)")
+            
+        case .dismissal:
+            // Clean everything up when dismissing
+            logger.info("🧹 DISMISSAL CLEANUP: Cleaning up all resources")
+            for index in players.keys {
+                performCleanup(for: index)
+            }
+            players.removeAll()
+            preloadedPlayers.removeAll()
+            playerUrls.removeAll()
+            
+        case .error:
+            // Clean up immediately on error
+            logger.info("🧹 ERROR CLEANUP: Cleaning up due to error")
+            for index in players.keys {
+                performCleanup(for: index)
+            }
+            players.removeAll()
+            preloadedPlayers.removeAll()
+            playerUrls.removeAll()
         }
-    }
-    
-    func cleanupPreloadedVideos() {
-        preloadedPlayers.removeAll()
+        
+        // Reset states
+        transitionState = .none
+        keepRange = nil
+        pendingCleanup.removeAll()
+        
+        logger.info("✨ CLEANUP: Cleanup completed")
     }
     
     // Add public access to current player
@@ -559,21 +592,37 @@ class VideoManager: NSObject, ObservableObject {
         return players.keys.filter { abs($0 - currentIndex) > 1 }
     }
     
+    // Remove old cleanup methods that are now handled by centralized cleanup
+    func cleanupVideo(for index: Int) {
+        performCleanup(for: index)
+    }
+
     func cleanupAllVideos() {
-        isTransitioningToPlayback = false
-        logger.info("🧹 CLEANUP: Starting cleanup of all videos")
+        cleanup(context: .dismissal)
+    }
+
+    private func performCleanup(for index: Int) {
+        logger.info("🧹 CLEANUP: Performing cleanup for index \(index)")
         
-        for (index, _) in players {
-            cleanupVideo(for: index)
+        if let player = players[index] {
+            player.pause()
+            cleanupObservers(for: index)
+            player.replaceCurrentItem(with: nil)
+            players.removeValue(forKey: index)
+            playerUrls.removeValue(forKey: index)
+            logger.info("✅ CLEANUP: Successfully cleaned up video at index \(index)")
         }
-        
-        players.removeAll()
-        playerUrls.removeAll()
-        timeObservers.removeAll()
-        observers.removeAll()
-        endTimeObservers.removeAll()
-        
-        logger.info("✅ CLEANUP: Successfully cleaned up all videos")
+    }
+
+    func prepareForTransition(from currentIndex: Int, to targetIndex: Int) {
+        logger.info("🔄 TRANSITION: Preparing transition from \(currentIndex) to \(targetIndex)")
+        self.transitionState = .transitioning(from: currentIndex, to: targetIndex)
+        cleanup(context: .navigation(from: currentIndex, to: targetIndex))
+    }
+    
+    func finishTransition(at index: Int) {
+        logger.info("✅ TRANSITION: Finished transition to index \(index)")
+        transitionState = .playing(index: index)
     }
     
     private func setupObservers(for index: Int, player: AVPlayer) {
@@ -624,55 +673,5 @@ class VideoManager: NSObject, ObservableObject {
     // Add method to get active players
     func getActivePlayers() -> [Int] {
         Array(players.keys)
-    }
-    
-    func prepareForTransition(from currentIndex: Int, to targetIndex: Int) {
-        logger.info("🔄 TRANSITION: Preparing transition from \(currentIndex) to \(targetIndex)")
-        self.transitionState = .transitioning(from: currentIndex, to: targetIndex)
-        
-        // Keep videos in range of both current and target indices
-        let minIndex = min(currentIndex, targetIndex)
-        let maxIndex = max(currentIndex, targetIndex)
-        self.keepRange = KeepRange(start: max(0, minIndex - 1), end: maxIndex + 1)
-        
-        logger.info("🛡️ PROTECTION: Keeping videos in range \(self.keepRange?.start ?? -1) to \(self.keepRange?.end ?? -1)")
-    }
-    
-    func finishTransition(at index: Int) {
-        logger.info("✅ TRANSITION: Finished transition to index \(index)")
-        transitionState = .playing(index: index)
-        
-        // Update keep range to include adjacent videos
-        keepRange = KeepRange(start: max(0, index - 1), end: index + 1)
-        
-        // Process any pending cleanups
-        processPendingCleanups()
-    }
-    
-    private func processPendingCleanups() {
-        logger.info("🧹 CLEANUP: Processing \(self.pendingCleanup.count) pending cleanups")
-        for index in self.pendingCleanup {
-            if let keepRange = self.keepRange {
-                if index >= keepRange.start && index <= keepRange.end {
-                    logger.info("🛡️ CLEANUP: Skipping cleanup for video \(index) as it's in keep range")
-                    continue
-                }
-            }
-            cleanupVideo(for: index)
-        }
-        self.pendingCleanup.removeAll()
-    }
-    
-    private func performCleanup(for index: Int) {
-        logger.info("🧹 CLEANUP: Performing cleanup for index \(index)")
-        
-        if let player = players[index] {
-            player.pause()
-            cleanupObservers(for: index)
-            player.replaceCurrentItem(with: nil)
-            players.removeValue(forKey: index)
-            playerUrls.removeValue(forKey: index)
-            logger.info("✅ CLEANUP: Successfully cleaned up video at index \(index)")
-        }
     }
 } 

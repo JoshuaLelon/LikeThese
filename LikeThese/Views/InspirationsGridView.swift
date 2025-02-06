@@ -10,6 +10,8 @@ struct InspirationsGridView: View {
     @State private var selectedIndex: Int?
     @State private var isVideoPlaybackActive = false
     @State private var gridVideos: [Video] = []
+    @State private var showError = false
+    @State private var errorMessage: String?
     
     private let columns = [
         GridItem(.flexible(), spacing: 0),
@@ -36,10 +38,15 @@ struct InspirationsGridView: View {
             .navigationDestination(isPresented: $isVideoPlaybackActive) {
                 if let video = selectedVideo,
                    let index = selectedIndex {
-                    VideoPlaybackView(initialVideo: video, initialIndex: index, videos: gridVideos)
-                        .onAppear {
-                            logger.info("🎥 Navigation - Selected video ID: \(video.id), Index: \(index), Total Videos: \(gridVideos.count)")
-                        }
+                    VideoPlaybackView(
+                        initialVideo: video,
+                        initialIndex: index,
+                        videos: gridVideos,
+                        videoManager: videoManager
+                    )
+                    .onAppear {
+                        logger.info("🎥 Navigation - Selected video ID: \(video.id), Index: \(index), Total Videos: \(gridVideos.count)")
+                    }
                 }
             }
         }
@@ -110,6 +117,13 @@ struct InspirationsGridView: View {
         .onAppear {
             logger.info("📱 Grid item appeared - Video ID: \(video.id), Index: \(index)")
         }
+        .alert("Video Error", isPresented: $showError) {
+            Button("OK", role: .cancel) {
+                showError = false
+            }
+        } message: {
+            Text(errorMessage ?? "Failed to load video")
+        }
     }
     
     private func fallbackVideoImage(video: Video, width: CGFloat, height: CGFloat) -> some View {
@@ -155,6 +169,11 @@ struct InspirationsGridView: View {
         guard let video = viewModel.videos[safe: index],
               let url = URL(string: video.url) else {
             logger.error("❌ NAVIGATION: Invalid video URL for index \(index)")
+            await MainActor.run {
+                errorMessage = "Invalid video URL"
+                showError = true
+                videoManager.cleanup(context: .error)
+            }
             return
         }
         
@@ -167,6 +186,11 @@ struct InspirationsGridView: View {
             }
         } catch {
             logger.error("❌ NAVIGATION: Failed to preload video at index \(index): \(error.localizedDescription)")
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                showError = true
+                videoManager.cleanup(context: .error)
+            }
         }
     }
 }

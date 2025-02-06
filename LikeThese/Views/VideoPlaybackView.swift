@@ -16,15 +16,21 @@ struct VideoPlaybackView: View {
     @StateObject private var viewModel = VideoViewModel()
     @ObservedObject var videoManager: VideoManager
     @State private var currentIndex: Int?
-    @State private var dragOffset: CGFloat = 0
     @State private var isGestureActive = false
     @GestureState private var dragState = false
-    @State private var autoAdvanceOffset: CGFloat = 0
     @State private var showError = false
     @State private var errorMessage: String?
     @Environment(\.dismiss) private var dismiss
-    @State private var horizontalDragOffset: CGFloat = 0
-    @State private var verticalDragOffset: CGFloat = 0
+    @State private var offset: CGFloat = 0
+    @State private var horizontalOffset: CGFloat = 0
+    @State private var transitionState: TransitionState = .none
+    @State private var transitionOpacity: Double = 1
+    @State private var incomingOffset: CGFloat = 0
+    
+    private enum TransitionState {
+        case none
+        case transitioning(from: Int, to: Int)
+    }
     
     let initialVideo: Video
     let initialIndex: Int
@@ -43,6 +49,7 @@ struct VideoPlaybackView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 
+                // Current video stays fixed in place
                 if let currentIndex = currentIndex,
                    let video = videos[safe: currentIndex],
                    let url = URL(string: video.url) {
@@ -51,29 +58,44 @@ struct VideoPlaybackView: View {
                         index: currentIndex,
                         videoManager: videoManager
                     )
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .ignoresSafeArea()
                     .gesture(
                         DragGesture()
                             .onChanged { value in
                                 isGestureActive = true
-                                // Determine if drag is more horizontal or vertical
                                 if abs(value.translation.width) > abs(value.translation.height) {
-                                    // Horizontal drag
-                                    horizontalDragOffset = value.translation.width
-                                    verticalDragOffset = 0
+                                    horizontalOffset = value.translation.width
+                                    offset = 0
                                 } else {
-                                    // Vertical drag
-                                    verticalDragOffset = value.translation.height
-                                    horizontalDragOffset = 0
+                                    offset = value.translation.height
+                                    horizontalOffset = 0
                                 }
                             }
                             .onEnded { value in
                                 handleDragGesture(value, geometry: geometry)
                             }
                     )
-                    .offset(x: horizontalDragOffset, y: verticalDragOffset + autoAdvanceOffset)
+                }
+                
+                // Only the incoming video moves in or out
+                if case .transitioning(_, let toIndex) = transitionState,
+                   let video = videos[safe: toIndex],
+                   let url = URL(string: video.url) {
+                    VideoPlayerView(
+                        url: url,
+                        index: toIndex,
+                        videoManager: videoManager
+                    )
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .ignoresSafeArea()
+                    .offset(y: incomingOffset)
+                    .opacity(1 - transitionOpacity)
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
+        .ignoresSafeArea()
         .onAppear {
             setupInitialPlayback()
         }
@@ -84,7 +106,10 @@ struct VideoPlaybackView: View {
             }
         }
         .onChange(of: videoManager.currentState) { newState in
-            handleStateChange(newState)
+            // Only handle state changes when not in a transition
+            if case .none = transitionState {
+                handleStateChange(newState)
+            }
         }
         .alert("Video Error", isPresented: $showError) {
             Button("Go Back") {
@@ -163,14 +188,32 @@ struct VideoPlaybackView: View {
         let velocityX = value.predictedEndLocation.x - value.location.x
         let velocityY = value.predictedEndLocation.y - value.location.y
         
+        // Reset offsets if gesture doesn't meet threshold
+        let resetOffsets = {
+            withAnimation(.spring()) {
+                horizontalOffset = 0
+                offset = 0
+                isGestureActive = false
+            }
+        }
+        
         // Determine if the gesture is primarily horizontal or vertical
         if abs(value.translation.width) > abs(value.translation.height) {
             // Horizontal gesture
             if abs(value.translation.width + velocityX) > horizontalThreshold {
                 if value.translation.width > 0 {
                     // Swipe right - return to grid
-                    dismiss()
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        horizontalOffset = geometry.size.width
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        dismiss()
+                    }
+                } else {
+                    resetOffsets()
                 }
+            } else {
+                resetOffsets()
             }
         } else {
             // Vertical gesture
@@ -182,14 +225,9 @@ struct VideoPlaybackView: View {
                     // Swipe up - next video
                     handleSwipeUp()
                 }
+            } else {
+                resetOffsets()
             }
-        }
-        
-        withAnimation(.spring()) {
-            horizontalDragOffset = 0
-            verticalDragOffset = 0
-            autoAdvanceOffset = 0
-            isGestureActive = false
         }
     }
     
@@ -203,9 +241,35 @@ struct VideoPlaybackView: View {
         
         Task {
             do {
+                // Set transition state and position incoming video
+                await MainActor.run {
+                    transitionState = .transitioning(from: current, to: current - 1)
+                    transitionOpacity = 1
+                    incomingOffset = -UIScreen.main.bounds.height
+                }
+                
+                // Prepare and preload next video
                 videoManager.prepareForTransition(from: current, to: current - 1)
                 try await videoManager.preloadVideo(url: url, forIndex: current - 1)
+                
+                // Start playing the next video
                 videoManager.startPlaying(at: current - 1)
+                
+                // Animate the incoming video into position
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    incomingOffset = 0
+                    transitionOpacity = 0
+                }
+                
+                // Wait for animation
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                
+                // Complete transition
+                await MainActor.run {
+                    currentIndex = current - 1
+                    transitionState = .none
+                    transitionOpacity = 1
+                }
             } catch {
                 errorMessage = error.localizedDescription
                 showError = true
@@ -224,9 +288,35 @@ struct VideoPlaybackView: View {
         
         Task {
             do {
+                // Set transition state and position incoming video
+                await MainActor.run {
+                    transitionState = .transitioning(from: current, to: current + 1)
+                    transitionOpacity = 1
+                    incomingOffset = UIScreen.main.bounds.height
+                }
+                
+                // Prepare and preload next video
                 videoManager.prepareForTransition(from: current, to: current + 1)
                 try await videoManager.preloadVideo(url: url, forIndex: current + 1)
+                
+                // Start playing the next video
                 videoManager.startPlaying(at: current + 1)
+                
+                // Animate the incoming video into position
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    incomingOffset = 0
+                    transitionOpacity = 0
+                }
+                
+                // Wait for animation
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                
+                // Complete transition
+                await MainActor.run {
+                    currentIndex = current + 1
+                    transitionState = .none
+                    transitionOpacity = 1
+                }
             } catch {
                 errorMessage = error.localizedDescription
                 showError = true
@@ -246,34 +336,37 @@ struct VideoPlaybackView: View {
                 return
             }
             
-            // Ensure we're on the main thread for UI updates
             Task { @MainActor in
                 if let current = currentIndex, current == index {
                     let nextIndex = index + 1
                     if nextIndex < viewModel.videos.count {
+                        // Set transition state and position incoming video
+                        transitionState = .transitioning(from: index, to: nextIndex)
+                        transitionOpacity = 1
+                        incomingOffset = UIScreen.main.bounds.height
+                        
                         // Prepare for transition
                         videoManager.prepareForTransition(from: index, to: nextIndex)
                         
-                        // First animate the swipe up
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            autoAdvanceOffset = -UIScreen.main.bounds.height * 0.3
-                            logger.info("🔄 AUTO-ADVANCE ANIMATION: Started swipe-up animation for completed video \(index)")
+                        // Animate the incoming video into position
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            incomingOffset = 0
+                            transitionOpacity = 0
+                            logger.info("🔄 AUTO-ADVANCE ANIMATION: Started transition animation")
                         }
                         
-                        // Wait for animation to complete
-                        try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                        // Wait for animation
+                        try? await Task.sleep(nanoseconds: 350_000_000)
                         
-                        // After the swipe up animation, advance to next video
-                        withAnimation {
-                            logger.info("🎯 AUTO-ADVANCE TRANSITION: Moving from completed video \(index) to next video \(nextIndex)")
-                            logger.info("📊 QUEUE STATUS: \(viewModel.videos.count - (nextIndex + 1)) videos remaining after auto-advance")
+                        // Complete transition
+                        if currentIndex == index {
                             currentIndex = nextIndex
-                            // Reset the offset for the next video
-                            autoAdvanceOffset = 0
+                            transitionState = .none
+                            transitionOpacity = 1
+                            
+                            logger.info("✅ AUTO-ADVANCE: Completed transition to video \(nextIndex)")
+                            videoManager.finishTransition(at: nextIndex)
                         }
-                        
-                        // Finish transition after animation
-                        videoManager.finishTransition(at: nextIndex)
                     }
                 }
             }

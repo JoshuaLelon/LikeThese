@@ -261,28 +261,32 @@ class VideoManager: NSObject, ObservableObject {
     
     private func setupEndTimeObserver(for player: AVPlayer, at index: Int) {
         // Add observer for video end
-        let observer = player.addBoundaryTimeObserver(forTimes: [NSValue(time: player.currentItem?.duration ?? .zero)],
-                                                    queue: .main) { [weak self] in
-            guard let self = self else { return }
-            logger.debug("🎬 SYSTEM: Video at index \(index) reached end")
+        let observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] time in
+            guard let self = self,
+                  let currentItem = player.currentItem,
+                  !CMTimeGetSeconds(time).isNaN,
+                  !CMTimeGetSeconds(currentItem.duration).isNaN else { return }
             
-            // Log final video stats
-            if let currentItem = player.currentItem {
-                let duration = CMTimeGetSeconds(currentItem.duration)
-                logger.debug("📊 VIDEO COMPLETION: Video \(index) completed after \(String(format: "%.1f", duration))s")
-            }
+            let currentTime = CMTimeGetSeconds(time)
+            let duration = CMTimeGetSeconds(currentItem.duration)
+            let isNearEnd = currentTime >= duration - 0.1
             
-            // Check if video should auto-advance
-            if player.timeControlStatus == .playing {
-                logger.debug("🤖 AUTO ACTION: Triggering auto-advance from index \(index)")
+            if isNearEnd && player.timeControlStatus == .playing {
+                // Explicit video completion logging
+                logger.debug("🎬 VIDEO COMPLETED: Video at index \(index) has finished playing completely")
+                logger.debug("📊 VIDEO COMPLETION STATS: Video \(index) reached its end after \(String(format: "%.1f", duration))s total playback time")
+                logger.debug("🔄 VIDEO COMPLETION ACTION: Video \(index) finished naturally while playing - initiating auto-advance sequence")
+                
+                // Pause the current video to prevent looping
+                player.pause()
+                
+                // Trigger completion callback
                 self.onVideoComplete?(index)
-            } else {
-                logger.debug("⏸️ SYSTEM: Player \(index) is paused, skipping auto-advance")
             }
         }
         
         endTimeObservers[index] = (observer: observer, player: player)
-        logger.debug("🎬 SYSTEM: Added end time observer for index \(index)")
+        logger.debug("👀 COMPLETION OBSERVER: Successfully set up video completion monitoring for index \(index)")
     }
     
     @MainActor

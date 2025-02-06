@@ -20,6 +20,7 @@ struct VideoPlaybackView: View {
     @State private var isGestureActive = false
     @GestureState private var dragState = false
     @State private var isInitialLoad = true
+    @State private var autoAdvanceOffset: CGFloat = 0
     
     init() {
         logger.debug("📱 VideoPlaybackView initialized")
@@ -112,6 +113,7 @@ struct VideoPlaybackView: View {
             VideoPlayerView(url: url, index: index, videoManager: videoManager)
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .id(index)
+                .offset(y: index == currentIndex ? autoAdvanceOffset : 0)
                 .onAppear {
                     handleVideoAppear(index)
                 }
@@ -196,25 +198,39 @@ struct VideoPlaybackView: View {
     func setupVideoCompletion() {
         logger.debug("🔄 SYSTEM: Setting up video completion handler")
         videoManager.onVideoComplete = { [self] index in
-            logger.debug("🤖 AUTO ACTION: Video \(index) finished playing")
-            logger.debug("📊 QUEUE INFO: Current position \(index + 1) of \(viewModel.videos.count)")
+            logger.debug("🎬 VIDEO COMPLETION HANDLER: Auto-advance triggered for completed video at index \(index)")
+            logger.debug("📊 QUEUE POSITION: Video \(index + 1) of \(viewModel.videos.count) in queue")
             
             guard !isGestureActive else {
-                logger.debug("⚠️ GESTURE STATE: Active gesture detected, cancelling auto-advance")
+                logger.debug("⚠️ AUTO-ADVANCE CANCELLED: Active gesture detected during video completion at index \(index)")
                 return
             }
             
-            DispatchQueue.main.async {
+            // Ensure we're on the main thread for UI updates
+            Task { @MainActor in
+                // First animate the swipe up
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    autoAdvanceOffset = -UIScreen.main.bounds.height * 0.3
+                    logger.debug("🔄 AUTO-ADVANCE ANIMATION: Started swipe-up animation for completed video \(index)")
+                }
+                
+                // Wait for animation to complete
+                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                
+                // After the swipe up animation, advance to next video
                 withAnimation {
                     if let current = currentIndex, current == index {
                         let nextIndex = index + 1
-                        logger.debug("🤖 AUTO ACTION: Auto-advancing to video \(nextIndex)")
+                        logger.debug("🎯 AUTO-ADVANCE TRANSITION: Moving from completed video \(index) to next video \(nextIndex)")
                         if nextIndex < viewModel.videos.count {
-                            logger.debug("📊 QUEUE INFO: \(viewModel.videos.count - (nextIndex + 1)) videos remaining after advance")
+                            logger.debug("📊 QUEUE STATUS: \(viewModel.videos.count - (nextIndex + 1)) videos remaining after auto-advance")
+                            currentIndex = nextIndex
+                            // Reset the offset for the next video
+                            autoAdvanceOffset = 0
+                            logger.debug("✅ AUTO-ADVANCE COMPLETE: Successfully transitioned to video \(nextIndex)")
                         } else {
-                            logger.debug("⚠️ QUEUE STATE: Reached end of video queue")
+                            logger.debug("⚠️ QUEUE END REACHED: No more videos available after index \(index)")
                         }
-                        currentIndex = nextIndex
                     }
                 }
             }

@@ -1,8 +1,17 @@
 [x] I want to have comprehensive logging. Specifically, i want all pauses, unpauses, plays, swipe ups, and swipe downs to be logged, both by the app and by the user. I also want all video events (a video is paused or played) and all swipes (e.g. the video changes, the next video is loaded, the previous video is loaded) to be logged.
-[PROGRESS] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.
+[x] when any video finishes playing, I want the app to show a "swipe up event" and then the next video to start playing automatically 
+[ ] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.
 [ ] when I log in, I want the app to show a loading screen until ALL the videos are loaded
-[ ] when any video finishes playing, I want the app to show a "swipe up event" and then the next video to start playing automatically 
 
+### Implementation Details
+
+#### Auto-advance with Animation
+- Added autoAdvanceOffset state to track animation
+- Implemented smooth swipe up animation when video completes
+- Animation matches manual swipe gesture for consistency
+- Added proper cleanup and state reset for next video
+- Duration: 0.3s for natural feel
+- Distance: 30% of screen height (matches manual swipe threshold)
 
 ### Implementation Status
 
@@ -966,15 +975,19 @@ All logs follow the standardized format defined in LOGGING.md and include releva
 1. Fixed video track property loading
    - Updated asset keys to match AVFoundation requirements
    - Added proper error handling for non-playable assets
-2. Improved observer management
-   - Proper tracking of observer lifecycles
-   - Correct cleanup timing
-3. Enhanced error recovery
-   - Automatic retries for failed loads
-   - Network state handling
-4. Optimized resource management
-   - Proper cleanup of distant videos
-   - Memory leak prevention
+   - Fixed track property loading sequence
+
+2. Improved state management
+   - Added proper cleanup between video transitions
+   - Fixed race conditions in state updates
+   - Added error state handling
+   - Improved loading state management
+
+3. Enhanced gesture handling
+   - Added proper cleanup during swipes
+   - Improved preloading of adjacent videos
+   - Fixed state reset after gestures
+   - Added bounds checking for swipes
 
 ### Current Status
 + [IP] currently, in order to get the swiping functionality to work, I need to log out and then log back in. I want the swiping functionality to work without having to log out and log back in.

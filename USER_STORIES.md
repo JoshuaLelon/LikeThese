@@ -16,3 +16,6 @@
 
 ## Multiswipe:
 "As a user, I want to replace one video at a time by swiping it up AND replace multiple videos at the same time by holding between two videos or in the center of the 2x2 grid and swiping up. I want the system to replace them with new videos based on the ones I've left on the grid."
+
+
+path (consumer), niche (power users, learners), user stories

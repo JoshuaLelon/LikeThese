@@ -75,11 +75,10 @@ struct VideoPlaybackView: View {
             logger.info("📱 VIEW LIFECYCLE: VideoPlaybackView disappeared - cleaning up resources")
             if let currentIdx = currentIndex {
                 videoManager.pauseAllExcept(index: currentIdx)
-                // Keep current and adjacent videos, cleanup others
-                let keepIndices = Set([currentIdx - 1, currentIdx, currentIdx + 1])
-                for index in videoManager.getActivePlayers() where !keepIndices.contains(index) {
-                    videoManager.cleanupVideo(for: index)
-                }
+                // Prepare for transition to grid view (using -1 as grid view index)
+                videoManager.prepareForTransition(from: currentIdx, to: -1)
+                // Finish transition immediately as we're leaving
+                videoManager.finishTransition(at: -1)
             }
         }
         .ignoresSafeArea(edges: .all)
@@ -178,10 +177,9 @@ struct VideoPlaybackView: View {
             logger.info("🎯 Current index changed from \(oldValue ?? -1) to \(index)")
             logger.info("📊 \(viewModel.videos.count - (index + 1)) videos remaining in queue")
             
-            // Only cleanup old video if we're not at initial load
+            // Prepare for transition if we have an old index
             if let oldIndex = oldValue {
-                videoManager.cleanupVideo(for: oldIndex)
-                logger.info("🧹 Cleaned up video at index: \(oldIndex)")
+                videoManager.prepareForTransition(from: oldIndex, to: index)
             }
             
             // Pause all except current
@@ -189,6 +187,8 @@ struct VideoPlaybackView: View {
             
             Task {
                 await handleVideoPreload(index)
+                // Finish transition after preloading
+                videoManager.finishTransition(at: index)
             }
         }
     }
@@ -208,12 +208,7 @@ struct VideoPlaybackView: View {
             }
         }
         
-        // Only cleanup distant videos (more than 2 positions away)
-        let distantPlayers = videoManager.getDistantPlayers(from: index)
-        for playerIndex in distantPlayers {
-            logger.info("🧹 CLEANUP: Removing distant video at index \(playerIndex)")
-            videoManager.cleanupVideo(for: playerIndex)
-        }
+        // No need to manually cleanup distant videos anymore as it's handled by the transition system
     }
     
     func setupVideoCompletion() {
@@ -229,29 +224,32 @@ struct VideoPlaybackView: View {
             
             // Ensure we're on the main thread for UI updates
             Task { @MainActor in
-                // First animate the swipe up
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    autoAdvanceOffset = -UIScreen.main.bounds.height * 0.3
-                    logger.info("🔄 AUTO-ADVANCE ANIMATION: Started swipe-up animation for completed video \(index)")
-                }
-                
-                // Wait for animation to complete
-                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
-                
-                // After the swipe up animation, advance to next video
-                withAnimation {
-                    if let current = currentIndex, current == index {
-                        let nextIndex = index + 1
-                        logger.info("🎯 AUTO-ADVANCE TRANSITION: Moving from completed video \(index) to next video \(nextIndex)")
-                        if nextIndex < viewModel.videos.count {
+                if let current = currentIndex, current == index {
+                    let nextIndex = index + 1
+                    if nextIndex < viewModel.videos.count {
+                        // Prepare for transition
+                        videoManager.prepareForTransition(from: index, to: nextIndex)
+                        
+                        // First animate the swipe up
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            autoAdvanceOffset = -UIScreen.main.bounds.height * 0.3
+                            logger.info("🔄 AUTO-ADVANCE ANIMATION: Started swipe-up animation for completed video \(index)")
+                        }
+                        
+                        // Wait for animation to complete
+                        try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                        
+                        // After the swipe up animation, advance to next video
+                        withAnimation {
+                            logger.info("🎯 AUTO-ADVANCE TRANSITION: Moving from completed video \(index) to next video \(nextIndex)")
                             logger.info("📊 QUEUE STATUS: \(viewModel.videos.count - (nextIndex + 1)) videos remaining after auto-advance")
                             currentIndex = nextIndex
                             // Reset the offset for the next video
                             autoAdvanceOffset = 0
-                            logger.info("✅ AUTO-ADVANCE COMPLETE: Successfully transitioned to video \(nextIndex)")
-                        } else {
-                            logger.info("⚠️ QUEUE END REACHED: No more videos available after index \(index)")
                         }
+                        
+                        // Finish transition after animation
+                        videoManager.finishTransition(at: nextIndex)
                     }
                 }
             }

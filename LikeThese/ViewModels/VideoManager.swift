@@ -5,6 +5,21 @@ import Network
 
 private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoManager")
 
+enum VideoTransitionState {
+    case none
+    case transitioning(from: Int, to: Int)
+    case playing(index: Int)
+}
+
+private struct KeepRange {
+    let start: Int
+    let end: Int
+    
+    func contains(_ index: Int) -> Bool {
+        return index >= start && index <= end
+    }
+}
+
 @MainActor
 class VideoManager: NSObject, ObservableObject {
     private var players: [Int: AVPlayer] = [:]
@@ -31,6 +46,10 @@ class VideoManager: NSObject, ObservableObject {
     var onVideoComplete: ((Int) -> Void)?
     
     private var isTransitioningToPlayback = false
+    
+    private var transitionState: VideoTransitionState = .none
+    private var keepRange: KeepRange?
+    private var pendingCleanup = Set<Int>()
     
     override init() {
         super.init()
@@ -465,20 +484,20 @@ class VideoManager: NSObject, ObservableObject {
     }
     
     func cleanupVideo(for index: Int) {
-        guard !isTransitioningToPlayback else {
-            logger.info("⏳ CLEANUP: Skipping cleanup for index \(index) during transition")
-            return
-        }
-        
-        logger.info("🧹 CLEANUP: Starting cleanup for index \(index)")
-        
-        if let player = players[index] {
-            player.pause()
-            cleanupObservers(for: index)
-            player.replaceCurrentItem(with: nil)
-            players.removeValue(forKey: index)
-            playerUrls.removeValue(forKey: index)
-            logger.info("✅ CLEANUP: Successfully cleaned up video at index \(index)")
+        switch transitionState {
+        case .transitioning:
+            logger.info("⏳ CLEANUP: Deferring cleanup for index \(index) during transition")
+            pendingCleanup.insert(index)
+            
+        case .playing:
+            if let range = keepRange, range.contains(index) {
+                logger.info("🛡️ PROTECTION: Skipping cleanup for protected video at index \(index)")
+                return
+            }
+            performCleanup(for: index)
+            
+        case .none:
+            performCleanup(for: index)
         }
     }
     
@@ -561,38 +580,43 @@ class VideoManager: NSObject, ObservableObject {
         // Setup time observer
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         let timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            guard let self else { return }
-            let seconds = CMTimeGetSeconds(time)
-            logger.info("⏱️ TIME: Video \(index) at \(seconds) seconds")
+            if let self {
+                let seconds = CMTimeGetSeconds(time)
+                logger.info("⏱️ TIME: Video \(index) at \(seconds) seconds")
+            }
         }
-        timeObservers[index] = (observer: timeObserver, player: player)
+        self.timeObservers[index] = (observer: timeObserver, player: player)
         
         // Setup end time observer
         let endTime = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         let endObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) { [weak self] in
-            guard let self else { return }
-            logger.info("🎬 END: Video \(index) reached end")
-            self.onVideoComplete?(index)
-        }
-        endTimeObservers[index] = (observer: endObserver, player: player)
-        
-        // Setup KVO observer for status changes
-        let observer = player.observe(\.timeControlStatus) { [weak self] player, change in
-            guard let self else { return }
-            Task { @MainActor in
-                switch player.timeControlStatus {
-                case .playing:
-                    logger.info("▶️ STATUS: Video \(index) is playing")
-                case .paused:
-                    logger.info("⏸️ STATUS: Video \(index) is paused")
-                case .waitingToPlayAtSpecifiedRate:
-                    logger.info("⏳ STATUS: Video \(index) is buffering")
-                @unknown default:
-                    logger.info("❓ STATUS: Video \(index) in unknown state")
+            if let self {
+                logger.info("🎬 END: Video \(index) reached end")
+                Task { @MainActor in
+                    self.onVideoComplete?(index)
                 }
             }
         }
-        observers[index] = observer
+        self.endTimeObservers[index] = (observer: endObserver, player: player)
+        
+        // Setup KVO observer for status changes
+        let observer = player.observe(\.timeControlStatus) { [weak self] player, _ in
+            if let self {
+                Task { @MainActor in
+                    switch player.timeControlStatus {
+                    case .playing:
+                        logger.info("▶️ STATUS: Video \(index) is playing")
+                    case .paused:
+                        logger.info("⏸️ STATUS: Video \(index) is paused")
+                    case .waitingToPlayAtSpecifiedRate:
+                        logger.info("⏳ STATUS: Video \(index) is buffering")
+                    @unknown default:
+                        logger.info("❓ STATUS: Video \(index) in unknown state")
+                    }
+                }
+            }
+        }
+        self.observers[index] = observer
         
         logger.info("👀 OBSERVERS: Set up all observers for video \(index)")
     }
@@ -600,5 +624,55 @@ class VideoManager: NSObject, ObservableObject {
     // Add method to get active players
     func getActivePlayers() -> [Int] {
         Array(players.keys)
+    }
+    
+    func prepareForTransition(from currentIndex: Int, to targetIndex: Int) {
+        logger.info("🔄 TRANSITION: Preparing transition from \(currentIndex) to \(targetIndex)")
+        self.transitionState = .transitioning(from: currentIndex, to: targetIndex)
+        
+        // Keep videos in range of both current and target indices
+        let minIndex = min(currentIndex, targetIndex)
+        let maxIndex = max(currentIndex, targetIndex)
+        self.keepRange = KeepRange(start: max(0, minIndex - 1), end: maxIndex + 1)
+        
+        logger.info("🛡️ PROTECTION: Keeping videos in range \(self.keepRange?.start ?? -1) to \(self.keepRange?.end ?? -1)")
+    }
+    
+    func finishTransition(at index: Int) {
+        logger.info("✅ TRANSITION: Finished transition to index \(index)")
+        transitionState = .playing(index: index)
+        
+        // Update keep range to include adjacent videos
+        keepRange = KeepRange(start: max(0, index - 1), end: index + 1)
+        
+        // Process any pending cleanups
+        processPendingCleanups()
+    }
+    
+    private func processPendingCleanups() {
+        logger.info("🧹 CLEANUP: Processing \(self.pendingCleanup.count) pending cleanups")
+        for index in self.pendingCleanup {
+            if let keepRange = self.keepRange {
+                if index >= keepRange.start && index <= keepRange.end {
+                    logger.info("🛡️ CLEANUP: Skipping cleanup for video \(index) as it's in keep range")
+                    continue
+                }
+            }
+            cleanupVideo(for: index)
+        }
+        self.pendingCleanup.removeAll()
+    }
+    
+    private func performCleanup(for index: Int) {
+        logger.info("🧹 CLEANUP: Performing cleanup for index \(index)")
+        
+        if let player = players[index] {
+            player.pause()
+            cleanupObservers(for: index)
+            player.replaceCurrentItem(with: nil)
+            players.removeValue(forKey: index)
+            playerUrls.removeValue(forKey: index)
+            logger.info("✅ CLEANUP: Successfully cleaned up video at index \(index)")
+        }
     }
 } 

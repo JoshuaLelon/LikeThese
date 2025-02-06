@@ -23,6 +23,8 @@ struct VideoPlaybackView: View {
     @State private var showError = false
     @State private var errorMessage: String?
     @Environment(\.dismiss) private var dismiss
+    @State private var horizontalDragOffset: CGFloat = 0
+    @State private var verticalDragOffset: CGFloat = 0
     
     let initialVideo: Video
     let initialIndex: Int
@@ -53,13 +55,22 @@ struct VideoPlaybackView: View {
                         DragGesture()
                             .onChanged { value in
                                 isGestureActive = true
-                                dragOffset = value.translation.height
+                                // Determine if drag is more horizontal or vertical
+                                if abs(value.translation.width) > abs(value.translation.height) {
+                                    // Horizontal drag
+                                    horizontalDragOffset = value.translation.width
+                                    verticalDragOffset = 0
+                                } else {
+                                    // Vertical drag
+                                    verticalDragOffset = value.translation.height
+                                    horizontalDragOffset = 0
+                                }
                             }
                             .onEnded { value in
                                 handleDragGesture(value, geometry: geometry)
                             }
                     )
-                    .offset(y: dragOffset + autoAdvanceOffset)
+                    .offset(x: horizontalDragOffset, y: verticalDragOffset + autoAdvanceOffset)
                 }
             }
         }
@@ -148,22 +159,58 @@ struct VideoPlaybackView: View {
     
     private func handleDragGesture(_ value: DragGesture.Value, geometry: GeometryProxy) {
         let dragThreshold = geometry.size.height * 0.3
-        let velocity = value.predictedEndLocation.y - value.location.y
+        let horizontalThreshold = geometry.size.width * 0.3
+        let velocityX = value.predictedEndLocation.x - value.location.x
+        let velocityY = value.predictedEndLocation.y - value.location.y
         
-        if abs(value.translation.height + velocity) > dragThreshold {
-            if value.translation.height > 0 {
-                // Swipe down - return to grid
-                dismiss()
-            } else {
-                // Swipe up - next video
-                handleSwipeUp()
+        // Determine if the gesture is primarily horizontal or vertical
+        if abs(value.translation.width) > abs(value.translation.height) {
+            // Horizontal gesture
+            if abs(value.translation.width + velocityX) > horizontalThreshold {
+                if value.translation.width > 0 {
+                    // Swipe right - return to grid
+                    dismiss()
+                }
+            }
+        } else {
+            // Vertical gesture
+            if abs(value.translation.height + velocityY) > dragThreshold {
+                if value.translation.height > 0 {
+                    // Swipe down - previous video
+                    handleSwipeDown()
+                } else {
+                    // Swipe up - next video
+                    handleSwipeUp()
+                }
             }
         }
         
         withAnimation(.spring()) {
-            dragOffset = 0
+            horizontalDragOffset = 0
+            verticalDragOffset = 0
             autoAdvanceOffset = 0
             isGestureActive = false
+        }
+    }
+    
+    private func handleSwipeDown() {
+        guard let current = currentIndex,
+              current - 1 >= 0,
+              let previousVideo = videos[safe: current - 1],
+              let url = URL(string: previousVideo.url) else {
+            return
+        }
+        
+        Task {
+            do {
+                videoManager.prepareForTransition(from: current, to: current - 1)
+                try await videoManager.preloadVideo(url: url, forIndex: current - 1)
+                videoManager.startPlaying(at: current - 1)
+            } catch {
+                errorMessage = error.localizedDescription
+                showError = true
+                videoManager.cleanup(context: .error)
+            }
         }
     }
     

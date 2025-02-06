@@ -43,29 +43,51 @@ enum PreloadError: Error {
     case playerNotFound
 }
 
+enum VideoManagerState {
+    case idle
+    case loading(index: Int)
+    case playing(index: Int)
+    case paused(index: Int)
+    case buffering(index: Int, progress: Float)
+    case error(index: Int, error: Error)
+}
+
 @MainActor
 class VideoManager: NSObject, ObservableObject {
+    // State tracking
+    @Published private(set) var currentState: VideoManagerState = .idle
+    @Published private(set) var activeVideoIndex: Int?
+    @Published private(set) var isTransitioning = false
+    
+    // Existing properties
     private var players: [Int: AVPlayer] = [:]
     private var preloadedPlayers: [Int: AVPlayer] = [:]
     private var observers: [Int: NSKeyValueObservation] = [:]
-    private var timeObservers: [Int: (observer: Any, player: AVPlayer)] = [:]  // Track observers with their players
-    private var endTimeObservers: [Int: (observer: Any, player: AVPlayer)] = [:]  // Track end-time observers with their players
+    private var timeObservers: [Int: (observer: Any, player: AVPlayer)] = [:]
+    private var endTimeObservers: [Int: (observer: Any, player: AVPlayer)] = [:]
     private var playerItems: [Int: AVPlayerItem] = [:]
-    private var completedVideos: Set<Int> = [] // Track which videos have completed
+    private var completedVideos: Set<Int> = []
     private let videoCacheService = VideoCacheService.shared
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
     private var retryQueue: [(index: Int, url: URL)] = []
-    private var playerUrls: [Int: URL] = [:] // Track URLs for recovery
+    private var playerUrls: [Int: URL] = [:]
     
+    // Transition tracking
+    private var transitionTask: Task<Void, Never>?
+    private var preloadTasks: [Int: Task<Void, Error>] = [:]
+    
+    // Published states
     @Published private(set) var bufferingStates: [Int: Bool] = [:]
     @Published private(set) var bufferingProgress: [Int: Float] = [:]
-    @Published private(set) var playerStates: [Int: String] = [:] // Track player states
+    @Published private(set) var playerStates: [Int: String] = [:]
     @Published private(set) var networkState: String = "unknown"
     
-    private let preferredBufferDuration: TimeInterval = 10.0 // Buffer 10 seconds ahead
+    // Configuration
+    private let preferredBufferDuration: TimeInterval = 10.0
+    private let verificationTimeout: TimeInterval = 10.0
+    private let minimumBufferDuration: TimeInterval = 3.0
     
-    // Add completion handler
     var onVideoComplete: ((Int) -> Void)?
     
     private var isTransitioningToPlayback = false
@@ -76,8 +98,6 @@ class VideoManager: NSObject, ObservableObject {
     
     // Add state tracking
     @Published private(set) var preloadStates: [Int: PreloadState] = [:]
-    private let verificationTimeout: TimeInterval = 10.0
-    private let minimumBufferDuration: TimeInterval = 3.0
     
     override init() {
         super.init()
@@ -125,63 +145,158 @@ class VideoManager: NSObject, ObservableObject {
     }
     
     func preloadVideo(url: URL, forIndex index: Int) async throws {
-        logger.info("🔄 PRELOAD: Starting preload for index \(index)")
+        logger.info("🔄 PRELOAD: Starting preload for index \(index) with URL: \(url)")
         
-        // Update state
-        preloadStates[index] = .loading(progress: 0.0)
+        // Cancel any existing preload task for this index
+        preloadTasks[index]?.cancel()
+        preloadTasks[index] = nil
         
-        // Store URL for recovery
-        playerUrls[index] = url
+        // Update initial state
+        await MainActor.run {
+            self.preloadStates[index] = .loading(progress: 0.0)
+            if case .idle = self.currentState {
+                self.currentState = .loading(index: index)
+            }
+        }
         
         do {
-            // Create new player item
-            let playerItem = try await videoCacheService.preloadVideo(url: url)
-            
-            // Create new player
-            let player = AVPlayer(playerItem: playerItem)
-            player.automaticallyWaitsToMinimizeStalling = true
-            
-            // Wait for player to be ready
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                var observer: NSKeyValueObservation?
-                
-                observer = playerItem.observe(\.status) { item, _ in
-                    switch item.status {
-                    case .readyToPlay:
-                        observer?.invalidate()
-                        continuation.resume()
-                    case .failed:
-                        observer?.invalidate()
-                        continuation.resume(throwing: PreloadError.verificationFailed(item.error?.localizedDescription ?? "Unknown error"))
-                    default:
-                        break
-                    }
+            try await retryWithBackoff(maxAttempts: 3) {
+                // Create player item with timeout
+                let playerItem = try await self.withTimeout(seconds: 30) {
+                    try await self.videoCacheService.preloadVideo(url: url)
                 }
                 
-                // Set up timeout
-                Task {
-                    try? await Task.sleep(nanoseconds: UInt64(10 * 1_000_000_000)) // 10 seconds
+                // Verify player item is valid
+                guard playerItem.asset.isPlayable else {
+                    logger.error("❌ PRELOAD ERROR: Asset is not playable for index \(index)")
+                    throw PreloadError.verificationFailed("Asset is not playable")
+                }
+                
+                // Create and configure player
+                await MainActor.run {
+                    let player = AVPlayer(playerItem: playerItem)
+                    player.automaticallyWaitsToMinimizeStalling = true
+                    
+                    // Store player
+                    self.cleanupVideo(for: index)
+                    self.players[index] = player
+                    self.playerItems[index] = playerItem
+                    self.playerUrls[index] = url
+                    
+                    // Setup observers
+                    self.setupBuffering(for: player, at: index)
+                    self.setupEndTimeObserver(for: player, at: index)
+                    
+                    // Update states
+                    self.preloadStates[index] = .ready
+                    if self.activeVideoIndex == index {
+                        self.currentState = .paused(index: index)
+                    }
+                    
+                    logger.info("✅ PRELOAD: Successfully preloaded video at index \(index)")
+                }
+            }
+        } catch {
+            logger.error("❌ PRELOAD ERROR: Failed to preload video \(index) after retries: \(error.localizedDescription)")
+            
+            // Add to retry queue if it's a network error
+            if (error as NSError).domain == NSURLErrorDomain {
+                self.retryQueue.append((index: index, url: url))
+                logger.info("🔄 PRELOAD: Added to retry queue - index: \(index)")
+            }
+            
+            await MainActor.run {
+                self.preloadStates[index] = .failed(error)
+                if self.activeVideoIndex == index {
+                    self.currentState = .error(index: index, error: error)
+                }
+            }
+            throw error
+        }
+    }
+    
+    private func withTimeout<T>(seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            // Add the actual operation
+            group.addTask {
+                return try await operation()
+            }
+            
+            // Add a timeout task
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw PreloadError.timeout
+            }
+            
+            // Wait for the first task to complete
+            guard let result = try await group.next() else {
+                throw PreloadError.timeout
+            }
+            
+            // Cancel any remaining tasks
+            group.cancelAll()
+            
+            return result
+        }
+    }
+    
+    private func retryWithBackoff(maxAttempts: Int = 3, operation: @escaping () async throws -> Void) async throws {
+        var attempt = 0
+        var delay = 1.0 // Start with 1 second delay
+        
+        while attempt < maxAttempts {
+            do {
+                try await operation()
+                return
+            } catch {
+                attempt += 1
+                if attempt == maxAttempts {
+                    throw error
+                }
+                
+                logger.info("🔄 RETRY: Attempt \(attempt) failed, retrying in \(delay) seconds")
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                delay *= 2 // Exponential backoff
+            }
+        }
+    }
+    
+    private func verifyPlayerItem(_ playerItem: AVPlayerItem) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var observer: NSKeyValueObservation?
+            var hasCompleted = false
+            
+            observer = playerItem.observe(\.status) { item, _ in
+                guard !hasCompleted else { return }
+                
+                switch item.status {
+                case .readyToPlay:
+                    hasCompleted = true
+                    observer?.invalidate()
+                    continuation.resume()
+                    
+                case .failed:
+                    hasCompleted = true
+                    observer?.invalidate()
+                    let error = item.error ?? NSError(domain: "com.Gauntlet.LikeThese", 
+                                                    code: -1, 
+                                                    userInfo: [NSLocalizedDescriptionKey: "Player item failed to load"])
+                    continuation.resume(throwing: PreloadError.verificationFailed(error.localizedDescription))
+                    
+                default:
+                    break
+                }
+            }
+            
+            // Set timeout
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(verificationTimeout * 1_000_000_000))
+                if !hasCompleted {
+                    hasCompleted = true
                     observer?.invalidate()
                     continuation.resume(throwing: PreloadError.timeout)
                 }
             }
-            
-            // Store the player
-            cleanupVideo(for: index)
-            players[index] = player
-            playerItems[index] = playerItem
-            
-            // Setup observers
-            setupBuffering(for: player, at: index)
-            setupEndTimeObserver(for: player, at: index)
-            
-            preloadStates[index] = .ready
-            logger.info("✅ PRELOAD: Successfully preloaded video at index \(index)")
-            
-        } catch {
-            preloadStates[index] = .failed(error)
-            logger.error("❌ PRELOAD: Failed to preload video \(index): \(error.localizedDescription)")
-            throw error
         }
     }
     
@@ -380,16 +495,29 @@ class VideoManager: NSObject, ObservableObject {
         logger.info("👆 TOGGLE: Requested for index \(index)")
         
         guard let player = players[index] else {
-            logger.error("❌ PLAYBACK ERROR: Cannot toggle play/pause - no player found for index \(index)")
+            logger.error("❌ PLAYBACK ERROR: No player found for index \(index)")
             return
         }
         
-        if player.timeControlStatus == .playing {
-            player.pause()
-            logger.info("⏸️ PLAYBACK: Paused video \(index)")
-        } else {
-            player.play()
-            logger.info("▶️ PLAYBACK: Started playing video \(index)")
+        Task { @MainActor in
+            switch player.timeControlStatus {
+            case .playing:
+                player.pause()
+                currentState = .paused(index: index)
+                logger.info("⏸️ PLAYBACK: Paused video \(index)")
+                
+            case .paused:
+                player.play()
+                currentState = .playing(index: index)
+                logger.info("▶️ PLAYBACK: Started playing video \(index)")
+                
+            case .waitingToPlayAtSpecifiedRate:
+                currentState = .buffering(index: index, progress: bufferingProgress[index] ?? 0)
+                logger.info("⏳ PLAYBACK: Video \(index) is buffering")
+                
+            @unknown default:
+                logger.error("❌ PLAYBACK ERROR: Unknown player state for index \(index)")
+            }
         }
     }
     
@@ -438,6 +566,15 @@ class VideoManager: NSObject, ObservableObject {
             players.removeAll()
             preloadedPlayers.removeAll()
             playerUrls.removeAll()
+            preloadTasks.values.forEach { $0.cancel() }
+            preloadTasks.removeAll()
+            transitionTask?.cancel()
+            transitionTask = nil
+            
+            // Reset all states
+            currentState = .idle
+            activeVideoIndex = nil
+            isTransitioning = false
             
         case .error:
             // Clean up immediately on error
@@ -448,12 +585,19 @@ class VideoManager: NSObject, ObservableObject {
             players.removeAll()
             preloadedPlayers.removeAll()
             playerUrls.removeAll()
+            preloadTasks.values.forEach { $0.cancel() }
+            preloadTasks.removeAll()
+            transitionTask?.cancel()
+            transitionTask = nil
+            
+            // Reset states but keep error state if we have an active video
+            if let activeIndex = activeVideoIndex {
+                currentState = .error(index: activeIndex, error: NSError(domain: "com.Gauntlet.LikeThese", code: -1, userInfo: [NSLocalizedDescriptionKey: "Playback error occurred"]))
+            } else {
+                currentState = .idle
+            }
+            isTransitioning = false
         }
-        
-        // Reset states
-        transitionState = .none
-        keepRange = nil
-        pendingCleanup.removeAll()
         
         logger.info("✨ CLEANUP: Cleanup completed")
     }
@@ -502,7 +646,12 @@ class VideoManager: NSObject, ObservableObject {
         // Clear player item reference
         playerItems[index] = nil
         
-        // Don't clear playerUrls[index] to allow for recovery
+        // Clear states
+        bufferingStates[index] = nil
+        bufferingProgress[index] = nil
+        playerStates[index] = nil
+        preloadStates[index] = nil
+        
         logger.info("✨ CLEANUP: Completed observer cleanup for index \(index)")
     }
     
@@ -530,14 +679,56 @@ class VideoManager: NSObject, ObservableObject {
             player.replaceCurrentItem(with: nil)
             players.removeValue(forKey: index)
             playerUrls.removeValue(forKey: index)
+            
+            // Update state if this was the active video
+            if activeVideoIndex == index {
+                currentState = .idle
+                activeVideoIndex = nil
+            }
+            
+            // Cancel any preload task
+            preloadTasks[index]?.cancel()
+            preloadTasks.removeValue(forKey: index)
+            
             logger.info("✅ CLEANUP: Successfully cleaned up video at index \(index)")
         }
     }
 
     func prepareForTransition(from currentIndex: Int, to targetIndex: Int) {
-        logger.info("🔄 TRANSITION: Preparing transition from \(currentIndex) to \(targetIndex)")
-        self.transitionState = .transitioning(from: currentIndex, to: targetIndex)
-        cleanup(context: .navigation(from: currentIndex, to: targetIndex))
+        logger.info("🔄 TRANSITION: Starting transition from \(currentIndex) to \(targetIndex)")
+        
+        // Cancel any existing transition
+        transitionTask?.cancel()
+        
+        // Start new transition
+        isTransitioning = true
+        transitionTask = Task { [weak self] in
+            guard let self = self else { return }
+            
+            // Update state
+            await MainActor.run {
+                self.currentState = .loading(index: targetIndex)
+                self.activeVideoIndex = targetIndex
+            }
+            
+            // Calculate keep range
+            let keepRange = KeepRange(
+                start: min(currentIndex, targetIndex) - 1,
+                end: max(currentIndex, targetIndex) + 1
+            )
+            
+            // Cleanup distant players
+            for index in self.players.keys where !keepRange.contains(index) {
+                await self.performCleanup(for: index)
+            }
+            
+            // Ensure we're on main actor for state updates
+            await MainActor.run {
+                self.isTransitioning = false
+            }
+            
+            logger.info("✅ TRANSITION: Completed transition to \(targetIndex)")
+        }
     }
     
     func finishTransition(at index: Int) {

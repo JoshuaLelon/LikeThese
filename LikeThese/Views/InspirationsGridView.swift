@@ -5,13 +5,18 @@ private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "Insp
 
 struct InspirationsGridView: View {
     @StateObject private var viewModel = VideoViewModel()
-    @StateObject private var videoManager = VideoManager()
+    @ObservedObject var videoManager: VideoManager
     @State private var selectedVideo: Video?
     @State private var selectedIndex: Int?
     @State private var isVideoPlaybackActive = false
     @State private var gridVideos: [Video] = []
     @State private var showError = false
     @State private var errorMessage: String?
+    
+    @MainActor
+    init(videoManager: VideoManager = VideoManager.shared) {
+        self.videoManager = videoManager
+    }
     
     private let columns = [
         GridItem(.flexible(), spacing: 0),
@@ -166,7 +171,7 @@ struct InspirationsGridView: View {
     }
     
     func preloadAndNavigate(to index: Int) async {
-        guard let video = viewModel.videos[safe: index],
+        guard let video = gridVideos[safe: index],
               let url = URL(string: video.url) else {
             logger.error("❌ NAVIGATION: Invalid video URL for index \(index)")
             await MainActor.run {
@@ -178,11 +183,22 @@ struct InspirationsGridView: View {
         }
         
         do {
+            // Prepare for transition before preloading
+            videoManager.prepareForPlayback(at: index)
+            
+            // Preload video and wait for completion
             try await videoManager.preloadVideo(url: url, forIndex: index)
+            
+            // Only navigate if preload was successful and we haven't started another preload
             await MainActor.run {
-                selectedVideo = video
-                selectedIndex = index
-                isVideoPlaybackActive = true
+                if videoManager.currentState.currentIndex == index {
+                    selectedVideo = video
+                    selectedIndex = index
+                    isVideoPlaybackActive = true
+                    logger.info("✅ NAVIGATION: Successfully preloaded and navigating to video at index \(index)")
+                } else {
+                    logger.info("⚠️ NAVIGATION: Preload completed but state changed, cancelling navigation to index \(index)")
+                }
             }
         } catch {
             logger.error("❌ NAVIGATION: Failed to preload video at index \(index): \(error.localizedDescription)")

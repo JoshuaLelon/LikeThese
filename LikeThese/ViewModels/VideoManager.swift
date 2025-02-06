@@ -5,10 +5,39 @@ import Network
 
 private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoManager")
 
-enum VideoTransitionState {
-    case none
-    case transitioning(from: Int, to: Int)
+enum VideoPlayerState: Equatable {
+    case idle
+    case loading(index: Int)
     case playing(index: Int)
+    case paused(index: Int)
+    case error(index: Int, error: Error)
+    
+    var currentIndex: Int? {
+        switch self {
+        case .idle: return nil
+        case .loading(let index): return index
+        case .playing(let index): return index
+        case .paused(let index): return index
+        case .error(let index, _): return index
+        }
+    }
+    
+    static func == (lhs: VideoPlayerState, rhs: VideoPlayerState) -> Bool {
+        switch (lhs, rhs) {
+        case (.idle, .idle):
+            return true
+        case (.loading(let index1), .loading(let index2)):
+            return index1 == index2
+        case (.playing(let index1), .playing(let index2)):
+            return index1 == index2
+        case (.paused(let index1), .paused(let index2)):
+            return index1 == index2
+        case (.error(let index1, _), .error(let index2, _)):
+            return index1 == index2
+        default:
+            return false
+        }
+    }
 }
 
 private struct KeepRange {
@@ -43,19 +72,13 @@ enum PreloadError: Error {
     case playerNotFound
 }
 
-enum VideoManagerState {
-    case idle
-    case loading(index: Int)
-    case playing(index: Int)
-    case paused(index: Int)
-    case buffering(index: Int, progress: Float)
-    case error(index: Int, error: Error)
-}
-
 @MainActor
 class VideoManager: NSObject, ObservableObject {
+    // Singleton instance
+    static let shared = VideoManager()
+    
     // State tracking
-    @Published private(set) var currentState: VideoManagerState = .idle
+    @Published private(set) var currentState: VideoPlayerState = .idle
     @Published private(set) var activeVideoIndex: Int?
     @Published private(set) var isTransitioning = false
     
@@ -82,6 +105,7 @@ class VideoManager: NSObject, ObservableObject {
     @Published private(set) var bufferingProgress: [Int: Float] = [:]
     @Published private(set) var playerStates: [Int: String] = [:]
     @Published private(set) var networkState: String = "unknown"
+    @Published private(set) var preloadStates: [Int: PreloadState] = [:]
     
     // Configuration
     private let preferredBufferDuration: TimeInterval = 10.0
@@ -92,16 +116,14 @@ class VideoManager: NSObject, ObservableObject {
     
     private var isTransitioningToPlayback = false
     
-    private var transitionState: VideoTransitionState = .none
+    private var transitionState: VideoPlayerState = .idle
     private var keepRange: KeepRange?
     private var pendingCleanup = Set<Int>()
     
-    // Add state tracking
-    @Published private(set) var preloadStates: [Int: PreloadState] = [:]
-    
-    override init() {
+    // Private initializer for singleton
+    private override init() {
         super.init()
-        logger.info("📱 VideoManager initialized")
+        logger.info("📱 VideoManager singleton initialized")
         setupNetworkMonitoring()
     }
     
@@ -167,7 +189,7 @@ class VideoManager: NSObject, ObservableObject {
                 }
                 
                 // Verify player item is valid
-                guard playerItem.asset.isPlayable else {
+                guard try await playerItem.asset.load(.isPlayable) else {
                     logger.error("❌ PRELOAD ERROR: Asset is not playable for index \(index)")
                     throw PreloadError.verificationFailed("Asset is not playable")
                 }
@@ -485,39 +507,56 @@ class VideoManager: NSObject, ObservableObject {
         logger.info("👀 COMPLETION OBSERVER: Successfully set up video completion monitoring for index \(index)")
     }
     
-    func prepareForPlayback() {
-        isTransitioningToPlayback = true
-        logger.info("🎮 TRANSITION: Preparing for video playback")
+    func prepareForPlayback(at index: Int) {
+        logger.info("🎮 TRANSITION: Preparing for video playback at index \(index)")
+        currentState = .loading(index: index)
     }
     
-    // Non-async wrapper for togglePlayPause
-    func togglePlayPauseAction(index: Int) {
-        logger.info("👆 TOGGLE: Requested for index \(index)")
+    func startPlaying(at index: Int) {
+        guard let player = players[index] else {
+            logger.error("❌ PLAYBACK ERROR: No player found for index \(index)")
+            currentState = .error(index: index, error: NSError(domain: "com.Gauntlet.LikeThese", code: -1, userInfo: [NSLocalizedDescriptionKey: "Player not found"]))
+            return
+        }
         
+        player.play()
+        currentState = .playing(index: index)
+        logger.info("▶️ PLAYBACK: Started playing video \(index)")
+    }
+    
+    func pausePlaying(at index: Int) {
         guard let player = players[index] else {
             logger.error("❌ PLAYBACK ERROR: No player found for index \(index)")
             return
         }
         
-        Task { @MainActor in
-            switch player.timeControlStatus {
-            case .playing:
-                player.pause()
-                currentState = .paused(index: index)
-                logger.info("⏸️ PLAYBACK: Paused video \(index)")
-                
-            case .paused:
-                player.play()
-                currentState = .playing(index: index)
-                logger.info("▶️ PLAYBACK: Started playing video \(index)")
-                
-            case .waitingToPlayAtSpecifiedRate:
-                currentState = .buffering(index: index, progress: bufferingProgress[index] ?? 0)
-                logger.info("⏳ PLAYBACK: Video \(index) is buffering")
-                
-            @unknown default:
-                logger.error("❌ PLAYBACK ERROR: Unknown player state for index \(index)")
-            }
+        player.pause()
+        currentState = .paused(index: index)
+        logger.info("⏸️ PLAYBACK: Paused video \(index)")
+    }
+    
+    func togglePlayPauseAction(index: Int) {
+        logger.info("👆 TOGGLE: Requested for index \(index)")
+        
+        guard let player = players[index] else {
+            logger.error("❌ PLAYBACK ERROR: No player found for index \(index)")
+            currentState = .error(index: index, error: NSError(domain: "com.Gauntlet.LikeThese", code: -1, userInfo: [NSLocalizedDescriptionKey: "Player not found"]))
+            return
+        }
+        
+        switch player.timeControlStatus {
+        case .playing:
+            pausePlaying(at: index)
+            
+        case .paused:
+            startPlaying(at: index)
+            
+        case .waitingToPlayAtSpecifiedRate:
+            currentState = .loading(index: index)
+            logger.info("⏳ PLAYBACK: Video \(index) is buffering")
+            
+        @unknown default:
+            logger.error("❌ PLAYBACK ERROR: Unknown player state for index \(index)")
         }
     }
     
@@ -541,63 +580,36 @@ class VideoManager: NSObject, ObservableObject {
         logger.info("🧹 CLEANUP: Starting cleanup with context: \(String(describing: context))")
         
         switch context {
-        case .navigation(let fromIndex, let toIndex):
-            // Keep videos in range of both indices
+        case .navigation(let from, let to):
+            // During navigation, only cleanup players outside the keep range
             let keepRange = KeepRange(
-                start: max(0, min(fromIndex, toIndex) - 1),
-                end: max(fromIndex, toIndex) + 1
+                start: min(from, to) - 1,
+                end: max(from, to) + 1
             )
-            
-            // Only cleanup videos outside the keep range
-            for index in players.keys {
-                if !keepRange.contains(index) {
-                    performCleanup(for: index)
-                }
+            for index in players.keys where !keepRange.contains(index) {
+                performCleanup(for: index)
             }
-            
-            logger.info("🛡️ NAVIGATION CLEANUP: Keeping videos in range \(keepRange.start) to \(keepRange.end)")
             
         case .dismissal:
-            // Clean everything up when dismissing
-            logger.info("🧹 DISMISSAL CLEANUP: Cleaning up all resources")
+            // On dismissal, cleanup everything
             for index in players.keys {
                 performCleanup(for: index)
             }
-            players.removeAll()
-            preloadedPlayers.removeAll()
-            playerUrls.removeAll()
-            preloadTasks.values.forEach { $0.cancel() }
-            preloadTasks.removeAll()
-            transitionTask?.cancel()
-            transitionTask = nil
-            
-            // Reset all states
             currentState = .idle
             activeVideoIndex = nil
-            isTransitioning = false
             
         case .error:
-            // Clean up immediately on error
-            logger.info("🧹 ERROR CLEANUP: Cleaning up due to error")
-            for index in players.keys {
+            // On error, cleanup everything except the current player if it exists
+            let currentIndex = currentState.currentIndex
+            for index in players.keys where index != currentIndex {
                 performCleanup(for: index)
             }
-            players.removeAll()
-            preloadedPlayers.removeAll()
-            playerUrls.removeAll()
-            preloadTasks.values.forEach { $0.cancel() }
-            preloadTasks.removeAll()
-            transitionTask?.cancel()
-            transitionTask = nil
-            
-            // Reset states but keep error state if we have an active video
-            if let activeIndex = activeVideoIndex {
-                currentState = .error(index: activeIndex, error: NSError(domain: "com.Gauntlet.LikeThese", code: -1, userInfo: [NSLocalizedDescriptionKey: "Playback error occurred"]))
-            } else {
-                currentState = .idle
-            }
-            isTransitioning = false
         }
+        
+        // Reset transition state
+        isTransitioning = false
+        transitionTask?.cancel()
+        transitionTask = nil
         
         logger.info("✨ CLEANUP: Cleanup completed")
     }
@@ -690,6 +702,12 @@ class VideoManager: NSObject, ObservableObject {
             preloadTasks[index]?.cancel()
             preloadTasks.removeValue(forKey: index)
             
+            // Clear states
+            bufferingStates[index] = nil
+            bufferingProgress[index] = nil
+            playerStates[index] = nil
+            preloadStates[index] = nil
+            
             logger.info("✅ CLEANUP: Successfully cleaned up video at index \(index)")
         }
     }
@@ -719,7 +737,7 @@ class VideoManager: NSObject, ObservableObject {
             
             // Cleanup distant players
             for index in self.players.keys where !keepRange.contains(index) {
-                await self.performCleanup(for: index)
+                self.performCleanup(for: index)
             }
             
             // Ensure we're on main actor for state updates
@@ -733,7 +751,7 @@ class VideoManager: NSObject, ObservableObject {
     
     func finishTransition(at index: Int) {
         logger.info("✅ TRANSITION: Finished transition to index \(index)")
-        transitionState = .playing(index: index)
+        currentState = .playing(index: index)
     }
     
     private func setupObservers(for index: Int, player: AVPlayer) {
@@ -747,8 +765,7 @@ class VideoManager: NSObject, ObservableObject {
         
         // Setup end time observer
         let endTime = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        let endObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) { [weak self] in
-            guard let self else { return }
+        let endObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) {
             logger.info("🎬 END: Video \(index) reached end")
             Task { @MainActor in
                 self.onVideoComplete?(index)

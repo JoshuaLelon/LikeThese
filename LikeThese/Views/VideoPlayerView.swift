@@ -77,7 +77,7 @@ struct VideoPlayerView_Previews: PreviewProvider {
         VideoPlayerView(
             url: URL(string: "https://example.com/video.mp4")!,
             index: 0,
-            videoManager: VideoManager()
+            videoManager: VideoManager.shared
         )
     }
 }

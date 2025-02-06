@@ -3,11 +3,12 @@ import FirebaseAuth
 
 struct ContentView: View {
     @StateObject private var authService = AuthService()
+    @StateObject private var videoManager = VideoManager.shared
     
     var body: some View {
         ZStack {
             if authService.isAuthenticated {
-                InspirationsGridView()
+                InspirationsGridView(videoManager: videoManager)
                     .overlay(alignment: .topTrailing) {
                         signOutButton
                     }
@@ -20,6 +21,7 @@ struct ContentView: View {
     private var signOutButton: some View {
         Button(action: {
             try? authService.signOut()
+            videoManager.cleanup(context: .dismissal)
         }) {
             HStack {
                 Image(systemName: "rectangle.portrait.and.arrow.right")

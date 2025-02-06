@@ -26,6 +26,23 @@ enum CleanupContext {
     case error
 }
 
+enum PreloadState {
+    case notStarted
+    case loading(progress: Float)
+    case verifying
+    case ready
+    case failed(Error)
+    case timedOut
+}
+
+enum PreloadError: Error {
+    case timeout
+    case verificationFailed(String)
+    case retryFailed
+    case bufferingIncomplete
+    case playerNotFound
+}
+
 @MainActor
 class VideoManager: NSObject, ObservableObject {
     private var players: [Int: AVPlayer] = [:]
@@ -56,6 +73,11 @@ class VideoManager: NSObject, ObservableObject {
     private var transitionState: VideoTransitionState = .none
     private var keepRange: KeepRange?
     private var pendingCleanup = Set<Int>()
+    
+    // Add state tracking
+    @Published private(set) var preloadStates: [Int: PreloadState] = [:]
+    private let verificationTimeout: TimeInterval = 10.0
+    private let minimumBufferDuration: TimeInterval = 3.0
     
     override init() {
         super.init()
@@ -98,62 +120,69 @@ class VideoManager: NSObject, ObservableObject {
         }
     }
     
-    func player(for index: Int) -> AVPlayer {
-        logger.info("🎯 REQUEST: Getting player for index \(index)")
-        logger.info("🔍 CURRENT STATE: Active players at indices: \(self.players.keys.sorted())")
-        if let url = playerUrls[index] {
-            logger.info("📺 VIDEO INFO: URL for index \(index): \(url)")
-        }
-
-        if let existingPlayer = players[index] {
-            logger.info("🎮 PLAYER ACCESS: Using existing player for index \(index)")
-            if let currentItem = existingPlayer.currentItem {
-                logger.info("📊 PLAYER STATUS: Video \(index) ready to play: \(currentItem.status == .readyToPlay)")
-                if let asset = currentItem.asset as? AVURLAsset {
-                    logger.info("🔍 PLAYER DETAIL: Current URL for index \(index): \(asset.url)")
-                }
-                if currentItem.status == .failed {
-                    logger.info("⚠️ PLAYER WARNING: Player item failed for index \(index), will attempt recovery")
-                }
-            } else {
-                logger.info("⚠️ PLAYER WARNING: Player exists but has no item for index \(index)")
-            }
-            return existingPlayer
-        }
+    func player(for index: Int) -> AVPlayer? {
+        return players[index]
+    }
+    
+    func preloadVideo(url: URL, forIndex index: Int) async throws {
+        logger.info("🔄 PRELOAD: Starting preload for index \(index)")
         
-        // If we have a preloaded player, use it
-        if let preloadedPlayer = preloadedPlayers[index] {
-            logger.info("🎮 Using preloaded player for index \(index)")
-            players[index] = preloadedPlayer
-            preloadedPlayers.removeValue(forKey: index)
+        // Update state
+        preloadStates[index] = .loading(progress: 0.0)
+        
+        // Store URL for recovery
+        playerUrls[index] = url
+        
+        do {
+            // Create new player item
+            let playerItem = try await videoCacheService.preloadVideo(url: url)
             
-            // Store the player item for potential recovery
-            if let item = preloadedPlayer.currentItem {
-                playerItems[index] = item
-                logger.info("📦 PLAYER SETUP: Stored player item for index \(index)")
+            // Create new player
+            let player = AVPlayer(playerItem: playerItem)
+            player.automaticallyWaitsToMinimizeStalling = true
+            
+            // Wait for player to be ready
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                var observer: NSKeyValueObservation?
+                
+                observer = playerItem.observe(\.status) { item, _ in
+                    switch item.status {
+                    case .readyToPlay:
+                        observer?.invalidate()
+                        continuation.resume()
+                    case .failed:
+                        observer?.invalidate()
+                        continuation.resume(throwing: PreloadError.verificationFailed(item.error?.localizedDescription ?? "Unknown error"))
+                    default:
+                        break
+                    }
+                }
+                
+                // Set up timeout
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(10 * 1_000_000_000)) // 10 seconds
+                    observer?.invalidate()
+                    continuation.resume(throwing: PreloadError.timeout)
+                }
             }
             
-            // Only setup observers if they don't exist
-            if observers[index] == nil {
-                setupBuffering(for: preloadedPlayer, at: index)
-            }
-            if endTimeObservers[index] == nil {
-                setupEndTimeObserver(for: preloadedPlayer, at: index)
-            }
-            return preloadedPlayer
+            // Store the player
+            cleanupVideo(for: index)
+            players[index] = player
+            playerItems[index] = playerItem
+            
+            // Setup observers
+            setupBuffering(for: player, at: index)
+            setupEndTimeObserver(for: player, at: index)
+            
+            preloadStates[index] = .ready
+            logger.info("✅ PRELOAD: Successfully preloaded video at index \(index)")
+            
+        } catch {
+            preloadStates[index] = .failed(error)
+            logger.error("❌ PRELOAD: Failed to preload video \(index): \(error.localizedDescription)")
+            throw error
         }
-        
-        logger.info("🎮 Creating new player for index \(index)")
-        let player = AVPlayer()
-        players[index] = player
-        
-        // Clear any existing observers for this index before setting up new ones
-        cleanupObservers(for: index)
-        
-        setupBuffering(for: player, at: index)
-        setupEndTimeObserver(for: player, at: index)
-        
-        return player
     }
     
     private func setupBuffering(for player: AVPlayer, at index: Int) {
@@ -166,7 +195,7 @@ class VideoManager: NSObject, ObservableObject {
         // Add periodic time observer for tracking playback progress
         let interval = CMTime(seconds: 1.0, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         let timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            guard let self = self,
+            guard let self,
                   let currentItem = player.currentItem else { return }
             
             let currentTime = CMTimeGetSeconds(time)
@@ -245,7 +274,7 @@ class VideoManager: NSObject, ObservableObject {
         
         // Add observer for video end and state changes
         let observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] time in
-            guard let self = self,
+            guard let self,
                   let currentItem = player.currentItem,
                   !CMTimeGetSeconds(time).isNaN,
                   !CMTimeGetSeconds(currentItem.duration).isNaN else { return }
@@ -346,130 +375,21 @@ class VideoManager: NSObject, ObservableObject {
         logger.info("🎮 TRANSITION: Preparing for video playback")
     }
     
-    func preloadVideo(url: URL, forIndex index: Int) async throws {
-        logger.info("🔄 PRELOAD: Starting preload for index \(index)")
-        
-        // If player already exists and is ready, just return
-        if let existingPlayer = players[index],
-           let currentItem = existingPlayer.currentItem,
-           currentItem.status == .readyToPlay {
-            logger.info("⚠️ PRELOAD: Player already exists for index \(index)")
-            return
-        }
-        
-        do {
-            // Store URL for recovery
-            playerUrls[index] = url
-            
-            // Create new player item
-            let playerItem = try await videoCacheService.preloadVideo(url: url)
-            
-            // Create new player
-            let player = AVPlayer(playerItem: playerItem)
-            player.automaticallyWaitsToMinimizeStalling = true
-            
-            // Store in preloaded players
-            preloadedPlayers[index] = player
-            playerItems[index] = playerItem
-            
-            // Setup observers
-            setupBuffering(for: player, at: index)
-            setupEndTimeObserver(for: player, at: index)
-            
-            logger.info("👀 OBSERVERS: Set up all observers for video \(index)")
-            logger.info("✅ PRELOAD: Successfully preloaded video at index \(index)")
-        } catch {
-            logger.error("❌ PRELOAD ERROR: Failed to preload video \(index): \(error.localizedDescription)")
-            if isNetworkAvailable {
-                retryQueue.append((index: index, url: url))
-            }
-            throw error
-        }
-    }
-    
     // Non-async wrapper for togglePlayPause
     func togglePlayPauseAction(index: Int) {
         logger.info("👆 TOGGLE: Requested for index \(index)")
-        if let player = players[index], let asset = player.currentItem?.asset as? AVURLAsset {
-            logger.info("🎮 TOGGLE INFO: Current URL: \(asset.url)")
-        }
-        Task { @MainActor in
-            await togglePlayPause(index: index)
-        }
-    }
-
-    @MainActor
-    private func togglePlayPause(index: Int) async {
+        
         guard let player = players[index] else {
             logger.error("❌ PLAYBACK ERROR: Cannot toggle play/pause - no player found for index \(index)")
             return
         }
         
-        let currentState = player.timeControlStatus
-        if currentState == .playing {
-            logger.info("👤 USER ACTION: Manual pause requested for video \(index)")
-            // Add detailed user action logging
-            if let currentItem = player.currentItem {
-                let currentTime = CMTimeGetSeconds(currentItem.currentTime())
-                let duration = CMTimeGetSeconds(currentItem.duration)
-                logger.info("📊 USER STATS: Video \(index) paused at \(String(format: "%.1f", currentTime))s/\(String(format: "%.1f", duration))s (\(String(format: "%.1f%%", currentTime/duration * 100))% watched)")
-            }
+        if player.timeControlStatus == .playing {
             player.pause()
-            
-            // Verify the pause took effect and handle failure
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-            if player.timeControlStatus != .paused {
-                logger.error("❌ PLAYBACK ERROR: Video \(index) failed to pause")
-                // Try pause again with rate setting
-                player.rate = 0
-                player.pause()
-            }
+            logger.info("⏸️ PLAYBACK: Paused video \(index)")
         } else {
-            logger.info("👤 USER ACTION: Manual play requested for video \(index)")
-            // Add detailed user action logging
-            if let currentItem = player.currentItem {
-                let currentTime = CMTimeGetSeconds(currentItem.currentTime())
-                let duration = CMTimeGetSeconds(currentItem.duration)
-                logger.info("📊 USER STATS: Video \(index) resumed at \(String(format: "%.1f", currentTime))s/\(String(format: "%.1f", duration))s (\(String(format: "%.1f%%", currentTime/duration * 100))% watched)")
-            }
-            
-            if let currentItem = player.currentItem {
-                switch currentItem.status {
-                case .readyToPlay:
-                    logger.info("✅ PLAYBACK INFO: Video \(index) is ready to play")
-                    // Ensure proper playback rate and play
-                    player.rate = 1.0
-                    player.play()
-                    
-                    // Verify play state and handle failure
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                    if player.timeControlStatus != .playing {
-                        logger.error("❌ PLAYBACK ERROR: Video \(index) failed to start playing")
-                        // Try alternative play method
-                        let currentTime = currentItem.currentTime()
-                        await player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                        player.rate = 1.0
-                        player.play()
-                    }
-                case .failed:
-                    logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - item failed: \(currentItem.error?.localizedDescription ?? "unknown error")")
-                    // Attempt to recover
-                    await retryLoadingIfNeeded(for: index)
-                case .unknown:
-                    logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - item status unknown")
-                    // Wait for ready state
-                    let observer = currentItem.observe(\.status) { item, _ in
-                        if item.status == .readyToPlay {
-                            player.play()
-                        }
-                    }
-                    observers[index] = observer
-                @unknown default:
-                    logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - unexpected item status")
-                }
-            } else {
-                logger.error("❌ PLAYBACK ERROR: Cannot play video \(index) - no current item")
-            }
+            player.play()
+            logger.info("▶️ PLAYBACK: Started playing video \(index)")
         }
     }
     
@@ -628,40 +548,36 @@ class VideoManager: NSObject, ObservableObject {
     private func setupObservers(for index: Int, player: AVPlayer) {
         // Setup time observer
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        let timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            if let self {
-                let seconds = CMTimeGetSeconds(time)
-                logger.info("⏱️ TIME: Video \(index) at \(seconds) seconds")
-            }
+        let timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            let seconds = CMTimeGetSeconds(time)
+            logger.info("⏱️ TIME: Video \(index) at \(seconds) seconds")
         }
         self.timeObservers[index] = (observer: timeObserver, player: player)
         
         // Setup end time observer
         let endTime = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         let endObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) { [weak self] in
-            if let self {
-                logger.info("🎬 END: Video \(index) reached end")
-                Task { @MainActor in
-                    self.onVideoComplete?(index)
-                }
+            guard let self else { return }
+            logger.info("🎬 END: Video \(index) reached end")
+            Task { @MainActor in
+                self.onVideoComplete?(index)
             }
         }
         self.endTimeObservers[index] = (observer: endObserver, player: player)
         
         // Setup KVO observer for status changes
         let observer = player.observe(\.timeControlStatus) { [weak self] player, _ in
-            if let self {
-                Task { @MainActor in
-                    switch player.timeControlStatus {
-                    case .playing:
-                        logger.info("▶️ STATUS: Video \(index) is playing")
-                    case .paused:
-                        logger.info("⏸️ STATUS: Video \(index) is paused")
-                    case .waitingToPlayAtSpecifiedRate:
-                        logger.info("⏳ STATUS: Video \(index) is buffering")
-                    @unknown default:
-                        logger.info("❓ STATUS: Video \(index) in unknown state")
-                    }
+            guard let self else { return }
+            Task { @MainActor in
+                switch player.timeControlStatus {
+                case .playing:
+                    logger.info("▶️ STATUS: Video \(index) is playing")
+                case .paused:
+                    logger.info("⏸️ STATUS: Video \(index) is paused")
+                case .waitingToPlayAtSpecifiedRate:
+                    logger.info("⏳ STATUS: Video \(index) is buffering")
+                @unknown default:
+                    logger.info("❓ STATUS: Video \(index) in unknown state")
                 }
             }
         }

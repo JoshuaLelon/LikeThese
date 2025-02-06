@@ -89,9 +89,7 @@ struct VideoPlaybackView: View {
         .onDisappear {
             // Only cleanup if we're actually leaving the view hierarchy
             logger.info("📱 VIEW LIFECYCLE: VideoPlaybackView disappeared - cleaning up resources")
-            if let currentIdx = currentIndex {
-                videoManager.cleanup(context: .dismissal)
-            }
+            videoManager.cleanup(context: .dismissal)
         }
         .ignoresSafeArea(edges: .all)
         .statusBar(hidden: true)
@@ -162,9 +160,55 @@ struct VideoPlaybackView: View {
                 .onAppear {
                     handleVideoAppear(index)
                 }
+                .overlay {
+                    // Show loading state
+                    if let state = videoManager.preloadStates[index] {
+                        switch state {
+                        case .loading(let progress):
+                            loadingOverlay(progress: progress)
+                        case .verifying:
+                            loadingOverlay(progress: 1.0)
+                        case .failed, .timedOut:
+                            errorOverlay(index: index)
+                        default:
+                            EmptyView()
+                        }
+                    }
+                }
         }
         .gesture(createDragGesture(geometry))
         .highPriorityGesture(createTapGesture(index))
+    }
+    
+    private func loadingOverlay(progress: Float) -> some View {
+        ZStack {
+            Color.black.opacity(0.5)
+            VStack(spacing: 16) {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .tint(.white)
+                Text("\(Int(progress * 100))%")
+                    .foregroundColor(.white)
+                    .font(.headline)
+            }
+        }
+    }
+    
+    private func errorOverlay(index: Int) -> some View {
+        ZStack {
+            Color.black.opacity(0.7)
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 44))
+                    .foregroundColor(.white)
+                Text("Failed to load video")
+                    .foregroundColor(.white)
+                    .font(.headline)
+                Text("Swipe to continue")
+                    .foregroundColor(.white.opacity(0.8))
+                    .font(.subheadline)
+            }
+        }
     }
     
     private func handleVideoAppear(_ index: Int) {
@@ -176,9 +220,18 @@ struct VideoPlaybackView: View {
             if let url = URL(string: viewModel.videos[index].url) {
                 do {
                     try await videoManager.preloadVideo(url: url, forIndex: index)
-                    logger.info("🔄 Preloaded video at index: \(index)")
+                    logger.info("✅ Video ready at index: \(index)")
+                    
+                    // Only start playing if this is still the current index
+                    if currentIndex == index {
+                        videoManager.togglePlayPauseAction(index: index)
+                    }
                 } catch {
                     logger.error("❌ Failed to preload video at index \(index): \(error.localizedDescription)")
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                        showError = true
+                    }
                 }
             }
         }

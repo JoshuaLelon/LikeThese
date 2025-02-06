@@ -349,6 +349,23 @@ Cannot find 'Metadata' in scope
 
 These "fixes" may introduce actual issues or make the code more complex without resolving the underlying linter limitation. 
 
+### Viewing Logs in the Terminal
+To display your app's logs for the past 5 minutes while running in the iOS simulator, use:
+```bash
+xcrun simctl spawn booted log show --predicate 'process contains "LikeThese"' --debug --info --last 5m
+```
+Adjust the duration (`--last 5m`) or the predicate as needed to see more logs or focus on a specific timeframe.
+
+### Live-Streaming Logs
+Use the streaming command to see real-time output from the **LikeThese** simulator process:
+```bash
+xcrun simctl spawn booted log stream --predicate 'process contains "LikeThese"' --debug --info
+```
+This shows ongoing logs as they occur. To see historical logs for the past 5 minutes, use:
+```bash
+xcrun simctl spawn booted log show --predicate 'process contains "LikeThese"' --debug --info --last 5m
+```
+
 
 
 

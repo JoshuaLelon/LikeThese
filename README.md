@@ -24,7 +24,7 @@ To build and run the app during development:
 For a faster development loop, we use [InjectionIII](https://github.com/johnno1962/InjectionIII) to inject Swift code changes directly into the running simulator:
 
 1. Install InjectionIII from the Mac App Store or GitHub.  
-2. Launch it and select your running **LikeThese** simulator process under “Select App.”  
+2. Launch it and select your running **LikeThese** simulator process under "Select App."  
 3. Make sure you're using a **Debug** build.  
 4. Save any Swift file to see the updated code injected automatically.
 
@@ -121,3 +121,10 @@ LikeThese/
 - Make sure you have enough Firebase Storage quota
 - Script is idempotent (safe to run multiple times)
 - Already uploaded videos will be skipped
+
+## Debugging & Logs
+If you need to view simulator logs for **LikeThese**, run:
+```bash
+xcrun simctl spawn booted log show --predicate 'process contains "LikeThese"' --debug --info --last 5m
+```
+This displays the logs (including video completion events) from the last 5 minutes.

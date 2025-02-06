@@ -13,7 +13,7 @@ extension Array {
 }
 
 struct VideoPlaybackView: View {
-    @StateObject private var viewModel = VideoViewModel()
+    @ObservedObject var viewModel: VideoViewModel
     @ObservedObject var videoManager: VideoManager
     @State private var currentIndex: Int?
     @State private var isGestureActive = false
@@ -36,11 +36,12 @@ struct VideoPlaybackView: View {
     let initialIndex: Int
     let videos: [Video]
     
-    init(initialVideo: Video, initialIndex: Int, videos: [Video], videoManager: VideoManager) {
+    init(initialVideo: Video, initialIndex: Int, videos: [Video], videoManager: VideoManager, viewModel: VideoViewModel) {
         self.initialVideo = initialVideo
         self.initialIndex = initialIndex
         self.videos = videos
         self.videoManager = videoManager
+        self.viewModel = viewModel
         logger.info("📱 VideoPlaybackView initialized with video: \(initialVideo.id) at index: \(initialIndex), total videos: \(videos.count)")
     }
     
@@ -241,36 +242,56 @@ struct VideoPlaybackView: View {
         
         Task {
             do {
-                // Set transition state and position incoming video
-                await MainActor.run {
-                    transitionState = .transitioning(from: current, to: current - 1)
-                    transitionOpacity = 1
-                    incomingOffset = -UIScreen.main.bounds.height
+                // Begin gesture transition
+                videoManager.beginTransition(.gesture(from: current, to: current - 1)) {
+                    // Set transition state and position incoming video
+                    Task { @MainActor in
+                        transitionState = .transitioning(from: current, to: current - 1)
+                        transitionOpacity = 1
+                        incomingOffset = -UIScreen.main.bounds.height
+                    }
                 }
-                
-                // Prepare and preload next video
-                videoManager.prepareForTransition(from: current, to: current - 1)
+
+                // Ensure previous video is preloaded and ready
                 try await videoManager.preloadVideo(url: url, forIndex: current - 1)
                 
-                // Start playing the next video
-                videoManager.startPlaying(at: current - 1)
-                
-                // Animate the incoming video into position
-                withAnimation(.easeInOut(duration: 0.35)) {
+                // Ensure player is ready and start playing
+                if let player = videoManager.player(for: current - 1) {
+                    // Seek to start and prepare for playback
+                    await player.seek(to: .zero)
+                    player.playImmediately(atRate: 1.0)
+                    
+                    // Start playing before animation
+                    videoManager.startPlaying(at: current - 1)
+                    logger.info("▶️ SWIPE DOWN: Started playing video at index \(current - 1)")
+                }
+
+                // Animate the transition
+                withAnimation(.easeInOut(duration: 0.3)) {
                     incomingOffset = 0
                     transitionOpacity = 0
                 }
-                
-                // Wait for animation
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                
-                // Complete transition
+
+                // Wait for animation to complete
+                try await Task.sleep(nanoseconds: 300_000_000)
+
+                // Update state
                 await MainActor.run {
                     currentIndex = current - 1
                     transitionState = .none
                     transitionOpacity = 1
                 }
+
+                // End transition in VideoManager
+                videoManager.endTransition()
+
+                // Preload the previous video if available
+                if let prevPrevVideo = videos[safe: current - 2],
+                   let prevUrl = URL(string: prevPrevVideo.url) {
+                    try await videoManager.preloadVideo(url: prevUrl, forIndex: current - 2)
+                }
             } catch {
+                logger.error("❌ Failed to handle swipe down: \(error.localizedDescription)")
                 errorMessage = error.localizedDescription
                 showError = true
                 videoManager.cleanup(context: .error)
@@ -280,47 +301,72 @@ struct VideoPlaybackView: View {
     
     private func handleSwipeUp() {
         guard let current = currentIndex,
-              current + 1 < videos.count,
-              let nextVideo = videos[safe: current + 1],
-              let url = URL(string: nextVideo.url) else {
+              current + 1 < videos.count else {
             return
         }
-        
+
         Task {
-            do {
-                // Set transition state and position incoming video
-                await MainActor.run {
-                    transitionState = .transitioning(from: current, to: current + 1)
-                    transitionOpacity = 1
-                    incomingOffset = UIScreen.main.bounds.height
+            // Load more videos if needed
+            await viewModel.loadMoreVideosIfNeeded(currentIndex: current)
+
+            // Now handle the swipe up
+            if let nextVideo = videos[safe: current + 1],
+               let url = URL(string: nextVideo.url) {
+                do {
+                    // Begin gesture transition
+                    videoManager.beginTransition(.gesture(from: current, to: current + 1)) {
+                        // Set transition state and position incoming video
+                        Task { @MainActor in
+                            transitionState = .transitioning(from: current, to: current + 1)
+                            transitionOpacity = 1
+                            incomingOffset = UIScreen.main.bounds.height
+                        }
+                    }
+
+                    // Preload and prepare the next video
+                    try await videoManager.preloadVideo(url: url, forIndex: current + 1)
+                    
+                    // Ensure player is ready and start playing
+                    if let player = videoManager.player(for: current + 1) {
+                        // Seek to start and prepare for playback
+                        await player.seek(to: .zero)
+                        player.playImmediately(atRate: 1.0)
+                        
+                        // Start playing before animation
+                        videoManager.startPlaying(at: current + 1)
+                        logger.info("▶️ SWIPE UP: Started playing video at index \(current + 1)")
+                    }
+
+                    // Animate the transition
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        incomingOffset = 0
+                        transitionOpacity = 0
+                    }
+
+                    // Wait for animation to complete
+                    try await Task.sleep(nanoseconds: 300_000_000)
+
+                    // Update state
+                    await MainActor.run {
+                        currentIndex = current + 1
+                        transitionState = .none
+                        transitionOpacity = 1
+                    }
+
+                    // End transition in VideoManager
+                    videoManager.endTransition()
+
+                    // Preload the next video if available
+                    if let nextNextVideo = videos[safe: current + 2],
+                       let nextUrl = URL(string: nextNextVideo.url) {
+                        try await videoManager.preloadVideo(url: nextUrl, forIndex: current + 2)
+                    }
+                } catch {
+                    logger.error("❌ Failed to handle swipe up: \(error.localizedDescription)")
+                    errorMessage = error.localizedDescription
+                    showError = true
+                    videoManager.cleanup(context: .error)
                 }
-                
-                // Prepare and preload next video
-                videoManager.prepareForTransition(from: current, to: current + 1)
-                try await videoManager.preloadVideo(url: url, forIndex: current + 1)
-                
-                // Start playing the next video
-                videoManager.startPlaying(at: current + 1)
-                
-                // Animate the incoming video into position
-                withAnimation(.easeInOut(duration: 0.35)) {
-                    incomingOffset = 0
-                    transitionOpacity = 0
-                }
-                
-                // Wait for animation
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                
-                // Complete transition
-                await MainActor.run {
-                    currentIndex = current + 1
-                    transitionState = .none
-                    transitionOpacity = 1
-                }
-            } catch {
-                errorMessage = error.localizedDescription
-                showError = true
-                videoManager.cleanup(context: .error)
             }
         }
     }
@@ -386,7 +432,8 @@ struct VideoPlaybackView_Previews: PreviewProvider {
             ),
             initialIndex: 0,
             videos: [],
-            videoManager: VideoManager.shared
+            videoManager: VideoManager.shared,
+            viewModel: VideoViewModel()
         )
     }
 }

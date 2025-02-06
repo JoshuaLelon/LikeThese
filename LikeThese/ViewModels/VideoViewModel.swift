@@ -11,7 +11,7 @@ class VideoViewModel: ObservableObject {
     @Published var isLoadingMore: Bool = false
     @Published var error: Error?
     private let firestoreService = FirestoreService.shared
-    private let pageSize = 5
+    private let pageSize = 4 // Only load 4 at a time
     
     func loadInitialVideos() async {
         logger.debug("📥 Starting initial video load")
@@ -32,21 +32,19 @@ class VideoViewModel: ObservableObject {
     }
     
     func loadMoreVideosIfNeeded(currentIndex: Int) async {
-        // Load more videos when user is 2 videos away from the end
-        if currentIndex >= videos.count - 2 && !isLoadingMore {
-            logger.debug("📥 Loading more videos")
+        // Always try to load a new random video when we're 3 videos away from the end
+        if currentIndex >= videos.count - 3 && !isLoadingMore {
+            logger.debug("📥 Loading random video after index \(currentIndex)")
             isLoadingMore = true
             error = nil
             
             do {
-                let newVideos = try await firestoreService.fetchMoreVideos(
-                    after: videos.last?.id ?? "",
-                    limit: pageSize
-                )
-                logger.debug("✅ Loaded \(newVideos.count) more videos")
-                videos.append(contentsOf: newVideos)
+                // Load a single random video
+                let newVideo = try await firestoreService.fetchRandomVideo()
+                logger.debug("✅ Loaded random video: \(newVideo.id)")
+                videos.append(newVideo)
             } catch {
-                logger.error("❌ Error loading more videos: \(error.localizedDescription)")
+                logger.error("❌ Error loading random video: \(error.localizedDescription)")
                 self.error = error
             }
             

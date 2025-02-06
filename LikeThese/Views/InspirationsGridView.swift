@@ -46,19 +46,20 @@ struct InspirationsGridView: View {
                     VideoPlaybackView(
                         initialVideo: video,
                         initialIndex: index,
-                        videos: gridVideos,
-                        videoManager: videoManager
+                        videos: viewModel.videos,
+                        videoManager: videoManager,
+                        viewModel: viewModel
                     )
                     .onAppear {
-                        logger.info("🎥 Navigation - Selected video ID: \(video.id), Index: \(index), Total Videos: \(gridVideos.count)")
+                        logger.info("🎥 Navigation - Selected video ID: \(video.id), Index: \(index), Total Videos: \(viewModel.videos.count)")
                     }
                 }
             }
         }
         .task {
             await viewModel.loadInitialVideos()
-            // Store the first 4 videos in a stable array
-            gridVideos = Array(viewModel.videos.prefix(4))
+            // Use all videos instead of just first 4
+            gridVideos = viewModel.videos
             logger.info("📱 Grid initialized with \(gridVideos.count) videos")
         }
     }

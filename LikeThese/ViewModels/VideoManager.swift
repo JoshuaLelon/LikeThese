@@ -72,6 +72,31 @@ enum PreloadError: Error {
     case playerNotFound
 }
 
+enum TransitionState: Equatable {
+    case none
+    case gesture(from: Int, to: Int)
+    case autoAdvance(from: Int, to: Int)
+    case error
+    
+    var isActive: Bool {
+        switch self {
+        case .none:
+            return false
+        default:
+            return true
+        }
+    }
+    
+    var indices: (from: Int, to: Int)? {
+        switch self {
+        case .gesture(let from, let to), .autoAdvance(let from, let to):
+            return (from, to)
+        case .none, .error:
+            return nil
+        }
+    }
+}
+
 @MainActor
 class VideoManager: NSObject, ObservableObject {
     // Singleton instance
@@ -81,6 +106,15 @@ class VideoManager: NSObject, ObservableObject {
     @Published private(set) var currentState: VideoPlayerState = .idle
     @Published private(set) var activeVideoIndex: Int?
     @Published private(set) var isTransitioning = false
+    
+    // Add transition state management
+    @Published private(set) var transitionState: TransitionState = .none {
+        didSet {
+            isTransitioning = transitionState.isActive
+        }
+    }
+    private var transitionQueue: [(TransitionState, () -> Void)] = []
+    private var isProcessingTransition = false
     
     // Existing properties
     private var players: [Int: AVPlayer] = [:]
@@ -116,7 +150,6 @@ class VideoManager: NSObject, ObservableObject {
     
     private var isTransitioningToPlayback = false
     
-    private var transitionState: VideoPlayerState = .idle
     private var keepRange: KeepRange?
     private var pendingCleanup = Set<Int>()
     
@@ -469,11 +502,13 @@ class VideoManager: NSObject, ObservableObject {
                 // 3. We haven't already marked this video as completed
                 // 4. We've watched at least 50% of the video
                 // 5. Player is not seeking/scrubbing
+                // 6. No active transition is in progress
                 if isNearEnd && 
                    player.timeControlStatus == .playing && 
                    !self.completedVideos.contains(index) && 
                    percentagePlayed >= 50 &&
-                   currentItem.status == .readyToPlay {
+                   currentItem.status == .readyToPlay &&
+                   !self.transitionState.isActive {
                     
                     // Double check we're really at the end by comparing with duration
                     let actualTimeRemaining = duration - currentTime
@@ -491,13 +526,16 @@ class VideoManager: NSObject, ObservableObject {
                     logger.info("📊 VIDEO COMPLETION STATS: Watched \(String(format: "%.1f", percentagePlayed))% of video")
                     logger.info("🔄 VIDEO COMPLETION ACTION: Video \(index) finished naturally while playing - initiating auto-advance sequence")
                     
-                    // Pause the current video to prevent looping
-                    player.pause()
-                    
-                    // Trigger completion callback after a short delay to ensure pause takes effect
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        Task { @MainActor in
-                            self.onVideoComplete?(index)
+                    // Begin auto-advance transition
+                    self.beginTransition(.autoAdvance(from: index, to: index + 1)) {
+                        // Pause the current video to prevent looping
+                        player.pause()
+                        
+                        // Trigger completion callback after a short delay to ensure pause takes effect
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            Task { @MainActor in
+                                self.onVideoComplete?(index)
+                            }
                         }
                     }
                 }
@@ -729,10 +767,10 @@ class VideoManager: NSObject, ObservableObject {
                 self.activeVideoIndex = targetIndex
             }
             
-            // Calculate keep range
+            // Calculate keep range (include more videos for smoother navigation)
             let keepRange = KeepRange(
-                start: min(currentIndex, targetIndex) - 1,
-                end: max(currentIndex, targetIndex) + 1
+                start: min(currentIndex, targetIndex) - 2,
+                end: max(currentIndex, targetIndex) + 2
             )
             
             // Cleanup distant players
@@ -745,13 +783,37 @@ class VideoManager: NSObject, ObservableObject {
                 self.isTransitioning = false
             }
             
-            logger.info("✅ TRANSITION: Completed transition to \(targetIndex)")
+            logger.info("✅ TRANSITION: Completed transition preparation to \(targetIndex)")
         }
     }
     
     func finishTransition(at index: Int) {
-        logger.info("✅ TRANSITION: Finished transition to index \(index)")
-        currentState = .playing(index: index)
+        logger.info("✅ TRANSITION: Finishing transition to index \(index)")
+        
+        // Ensure we're in the correct state
+        guard case .playing(let currentIndex) = currentState, currentIndex == index else {
+            currentState = .playing(index: index)
+            return
+        }
+        
+        // Update active video index
+        activeVideoIndex = index
+        
+        // Schedule cleanup of distant videos
+        Task { @MainActor in
+            // Keep a window of videos around the current index
+            let keepRange = KeepRange(
+                start: index - 2,
+                end: index + 2
+            )
+            
+            // Cleanup videos outside the keep range
+            for videoIndex in players.keys where !keepRange.contains(videoIndex) {
+                performCleanup(for: videoIndex)
+            }
+        }
+        
+        logger.info("✅ TRANSITION: Successfully finished transition to \(index)")
     }
     
     private func setupObservers(for index: Int, player: AVPlayer) {
@@ -797,5 +859,28 @@ class VideoManager: NSObject, ObservableObject {
     // Add method to get active players
     func getActivePlayers() -> [Int] {
         Array(players.keys)
+    }
+
+    // Add transition management methods
+    func beginTransition(_ state: TransitionState, action: @escaping () -> Void) {
+        if !self.transitionState.isActive {
+            // No active transition, execute immediately
+            self.transitionState = state
+            action()
+        } else {
+            // Queue the transition
+            self.transitionQueue.append((state, action))
+            logger.info("🔄 TRANSITION: Queued transition \(String(describing: state)) behind active transition \(String(describing: self.transitionState))")
+        }
+    }
+    
+    func endTransition() {
+        self.transitionState = .none
+        
+        // Process next queued transition if any
+        if let (nextState, nextAction) = self.transitionQueue.first {
+            self.transitionQueue.removeFirst()
+            self.beginTransition(nextState, action: nextAction)
+        }
     }
 } 

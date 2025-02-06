@@ -397,4 +397,27 @@ class FirestoreService {
               completion(videoURL)
           }
     }
+    
+    func fetchRandomVideo() async throws -> Video {
+        logger.debug("🎲 Fetching random video")
+        
+        return try await executeWithRetry { [weak self] in
+            guard let self = self else { throw FirestoreError.invalidVideoData }
+            
+            // Get a random video from the collection
+            let videosRef = self.db.collection("videos")
+            let snapshot = try await videosRef.getDocuments()
+            
+            guard !snapshot.documents.isEmpty else {
+                throw FirestoreError.emptyVideoCollection
+            }
+            
+            // Get a random document
+            let randomDoc = snapshot.documents.randomElement()!
+            let data = randomDoc.data()
+            
+            logger.debug("🎲 Selected random video: \(randomDoc.documentID)")
+            return try await validateVideoData(data, documentId: randomDoc.documentID)
+        }
+    }
 } 

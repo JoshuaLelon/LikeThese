@@ -5,9 +5,11 @@ private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "Insp
 
 struct InspirationsGridView: View {
     @StateObject private var viewModel = VideoViewModel()
+    @StateObject private var videoManager = VideoManager()
     @State private var selectedVideo: Video?
     @State private var selectedIndex: Int?
     @State private var isVideoPlaybackActive = false
+    @State private var gridVideos: [Video] = []
     
     private let columns = [
         GridItem(.flexible(), spacing: 0),
@@ -34,15 +36,18 @@ struct InspirationsGridView: View {
             .navigationDestination(isPresented: $isVideoPlaybackActive) {
                 if let video = selectedVideo,
                    let index = selectedIndex {
-                    VideoPlaybackView(initialVideo: video, initialIndex: index)
+                    VideoPlaybackView(initialVideo: video, initialIndex: index, videos: gridVideos)
                         .onAppear {
-                            logger.debug("🎥 Navigated to video playback for video at index \(index)")
+                            logger.info("🎥 Navigation - Selected video ID: \(video.id), Index: \(index), Total Videos: \(gridVideos.count)")
                         }
                 }
             }
         }
         .task {
             await viewModel.loadInitialVideos()
+            // Store the first 4 videos in a stable array
+            gridVideos = Array(viewModel.videos.prefix(4))
+            logger.info("📱 Grid initialized with \(gridVideos.count) videos")
         }
     }
     
@@ -54,7 +59,7 @@ struct InspirationsGridView: View {
             
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 0) {
-                    ForEach(Array(viewModel.videos.prefix(4).enumerated()), id: \.element.id) { index, video in
+                    ForEach(Array(gridVideos.enumerated()), id: \.element.id) { index, video in
                         gridItem(for: video, index: index, width: itemWidth, height: itemHeight)
                     }
                 }
@@ -65,10 +70,14 @@ struct InspirationsGridView: View {
     
     private func gridItem(for video: Video, index: Int, width: CGFloat, height: CGFloat) -> some View {
         Button {
+            logger.info("👆 Grid selection - Video ID: \(video.id), Index: \(index), Grid Position: \(index % 2),\(index / 2)")
             selectedVideo = video
             selectedIndex = index
-            isVideoPlaybackActive = true
-            logger.debug("👆 User tapped video: \(video.id) at index \(index)")
+            
+            // Ensure video is ready for playback
+            Task {
+                await preloadAndNavigate(to: index)
+            }
         } label: {
             if let thumbnailUrl = video.thumbnailUrl, let url = URL(string: thumbnailUrl) {
                 AsyncImage(url: url) { phase in
@@ -98,6 +107,9 @@ struct InspirationsGridView: View {
         .buttonStyle(.plain)
         .frame(width: width, height: height)
         .background(Color.black)
+        .onAppear {
+            logger.info("📱 Grid item appeared - Video ID: \(video.id), Index: \(index)")
+        }
     }
     
     private func fallbackVideoImage(video: Video, width: CGFloat, height: CGFloat) -> some View {
@@ -136,6 +148,25 @@ struct InspirationsGridView: View {
                         .foregroundColor(.white)
                 }
             }
+        }
+    }
+    
+    func preloadAndNavigate(to index: Int) async {
+        guard let video = viewModel.videos[safe: index],
+              let url = URL(string: video.url) else {
+            logger.error("❌ NAVIGATION: Invalid video URL for index \(index)")
+            return
+        }
+        
+        do {
+            try await videoManager.preloadVideo(url: url, forIndex: index)
+            await MainActor.run {
+                selectedVideo = video
+                selectedIndex = index
+                isVideoPlaybackActive = true
+            }
+        } catch {
+            logger.error("❌ NAVIGATION: Failed to preload video at index \(index): \(error.localizedDescription)")
         }
     }
 }

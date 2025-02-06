@@ -19,41 +19,71 @@ struct VideoPlaybackView: View {
     @State private var dragOffset: CGFloat = 0
     @State private var isGestureActive = false
     @GestureState private var dragState = false
-    @State private var isInitialLoad = true
     @State private var autoAdvanceOffset: CGFloat = 0
     
     let initialVideo: Video
     let initialIndex: Int
+    let videos: [Video]
     
-    init(initialVideo: Video, initialIndex: Int) {
+    init(initialVideo: Video, initialIndex: Int, videos: [Video]) {
         self.initialVideo = initialVideo
         self.initialIndex = initialIndex
-        logger.debug("📱 VideoPlaybackView initialized with video: \(initialVideo.id) at index: \(initialIndex)")
+        self.videos = videos
+        logger.info("📱 VideoPlaybackView initialized with video: \(initialVideo.id) at index: \(initialIndex), total videos: \(videos.count)")
     }
     
     var body: some View {
         GeometryReader { geometry in
             mainContent(geometry)
         }
-        .ignoresSafeArea(edges: .all)
-        .statusBar(hidden: true)
-        .onAppear {
-            logger.debug("📱 VIEW LIFECYCLE: VideoPlaybackView appeared")
-            logger.debug("📊 INITIAL STATE: \(viewModel.videos.count) videos in initial queue")
-            Task {
-                await viewModel.loadInitialVideos()
-                if isInitialLoad {
-                    currentIndex = initialIndex
-                    isInitialLoad = false
-                    logger.debug("🎯 VIEW STATE: Setting initial index to \(initialIndex)")
+        .task {
+            // Initialize state and preload immediately
+            viewModel.videos = videos
+            currentIndex = initialIndex
+            logger.info("📊 INITIAL STATE: Setting up \(viewModel.videos.count) videos, current index: \(initialIndex)")
+            
+            // Setup video completion handler first
+            setupVideoCompletion()
+            
+            // Start playing the current video immediately
+            if let url = URL(string: initialVideo.url) {
+                logger.info("🎬 Starting playback for initial video: \(initialVideo.id)")
+                
+                // Ensure player is ready before starting playback
+                do {
+                    try await videoManager.preloadVideo(url: url, forIndex: initialIndex)
+                    
+                    // Start playing immediately on main thread
+                    await MainActor.run {
+                        videoManager.togglePlayPauseAction(index: initialIndex)
+                        logger.info("▶️ Playback started for initial video at index: \(initialIndex)")
+                    }
+                    
+                    // Preload the next video if available
+                    if initialIndex + 1 < videos.count,
+                       let nextVideoUrl = URL(string: videos[initialIndex + 1].url) {
+                        try await videoManager.preloadVideo(url: nextVideoUrl, forIndex: initialIndex + 1)
+                        logger.info("🔄 Preloaded next video at index: \(initialIndex + 1)")
+                    }
+                } catch {
+                    logger.error("❌ Failed to preload initial video: \(error.localizedDescription)")
                 }
             }
-            setupVideoCompletion()
         }
         .onDisappear {
-            logger.debug("📱 VIEW LIFECYCLE: VideoPlaybackView disappeared")
-            // Don't reset isInitialLoad here to maintain state across login/logout
+            // Only cleanup if we're actually leaving the view hierarchy
+            logger.info("📱 VIEW LIFECYCLE: VideoPlaybackView disappeared - cleaning up resources")
+            if let currentIdx = currentIndex {
+                videoManager.pauseAllExcept(index: currentIdx)
+                // Keep current and adjacent videos, cleanup others
+                let keepIndices = Set([currentIdx - 1, currentIdx, currentIdx + 1])
+                for index in videoManager.getActivePlayers() where !keepIndices.contains(index) {
+                    videoManager.cleanupVideo(for: index)
+                }
+            }
         }
+        .ignoresSafeArea(edges: .all)
+        .statusBar(hidden: true)
     }
     
     @ViewBuilder
@@ -73,14 +103,14 @@ struct VideoPlaybackView: View {
     private var loadingView: some View {
         ProgressView("Loading videos...")
             .onAppear {
-                logger.debug("⌛️ LOADING STATE: Initial videos loading")
+                logger.info("⌛️ LOADING STATE: Initial videos loading")
             }
     }
     
     private func errorView(_ error: Error) -> some View {
         ErrorView(error: error) {
             Task {
-                logger.debug("🔄 USER ACTION: Retrying initial video load after error")
+                logger.info("🔄 USER ACTION: Retrying initial video load after error")
                 await viewModel.loadInitialVideos()
             }
         }
@@ -121,54 +151,37 @@ struct VideoPlaybackView: View {
                 .onAppear {
                     handleVideoAppear(index)
                 }
-                .onDisappear {
-                    logger.debug("📱 VIEW LIFECYCLE: Video view \(index) disappeared")
-                }
-            
-            if viewModel.isLoadingMore && index == viewModel.videos.count - 1 {
-                loadingMoreView
-            }
         }
         .gesture(createDragGesture(geometry))
         .highPriorityGesture(createTapGesture(index))
     }
     
-    private var loadingMoreView: some View {
-        ProgressView()
-            .scaleEffect(1.5)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black.opacity(0.3))
-            .onAppear {
-                logger.debug("⌛️ LOADING STATE: Loading more videos at end of queue")
-            }
-    }
-    
     private func handleVideoAppear(_ index: Int) {
-        logger.debug("📱 VIEW LIFECYCLE: Video view \(index) appeared")
-        logger.debug("📊 QUEUE INFO: Current queue position \(index + 1) of \(viewModel.videos.count)")
-        
-        // Only set currentIndex if it's nil and we're not in initial load
-        if currentIndex == nil && !isInitialLoad {
-            currentIndex = index
-            logger.debug("🎯 VIEW STATE: Setting current index to \(index)")
-        }
+        logger.info("📱 Video view \(index) appeared")
+        logger.info("📊 Current queue position \(index + 1) of \(viewModel.videos.count)")
         
         // Ensure video is ready to play
         Task {
             if let url = URL(string: viewModel.videos[index].url) {
-                await videoManager.preloadVideo(url: url, forIndex: index)
+                do {
+                    try await videoManager.preloadVideo(url: url, forIndex: index)
+                    logger.info("🔄 Preloaded video at index: \(index)")
+                } catch {
+                    logger.error("❌ Failed to preload video at index \(index): \(error.localizedDescription)")
+                }
             }
         }
     }
     
     private func handleIndexChange(oldValue: Int?, newValue: Int?) {
         if let index = newValue {
-            logger.debug("🎯 VIEW STATE: Current index changed from \(oldValue ?? -1) to \(index)")
-            logger.debug("📊 QUEUE INFO: \(viewModel.videos.count - (index + 1)) videos remaining in queue")
+            logger.info("🎯 Current index changed from \(oldValue ?? -1) to \(index)")
+            logger.info("📊 \(viewModel.videos.count - (index + 1)) videos remaining in queue")
             
-            // Cleanup old video if it exists
+            // Only cleanup old video if we're not at initial load
             if let oldIndex = oldValue {
                 videoManager.cleanupVideo(for: oldIndex)
+                logger.info("🧹 Cleaned up video at index: \(oldIndex)")
             }
             
             // Pause all except current
@@ -187,26 +200,30 @@ struct VideoPlaybackView: View {
         // Preload next video if available
         if index + 1 < viewModel.videos.count,
            let nextVideoUrl = URL(string: viewModel.videos[index + 1].url) {
-            logger.debug("🔄 SYSTEM: Initiating preload for next video (index \(index + 1))")
-            await videoManager.preloadVideo(url: nextVideoUrl, forIndex: index + 1)
+            logger.info("🔄 SYSTEM: Initiating preload for next video (index \(index + 1))")
+            do {
+                try await videoManager.preloadVideo(url: nextVideoUrl, forIndex: index + 1)
+            } catch {
+                logger.error("❌ Failed to preload next video at index \(index + 1): \(error.localizedDescription)")
+            }
         }
         
-        // Cleanup videos that are too far away (more than 2 positions)
+        // Only cleanup distant videos (more than 2 positions away)
         let distantPlayers = videoManager.getDistantPlayers(from: index)
         for playerIndex in distantPlayers {
-            logger.debug("🧹 CLEANUP: Removing distant video at index \(playerIndex)")
+            logger.info("🧹 CLEANUP: Removing distant video at index \(playerIndex)")
             videoManager.cleanupVideo(for: playerIndex)
         }
     }
     
     func setupVideoCompletion() {
-        logger.debug("🔄 SYSTEM: Setting up video completion handler")
+        logger.info("🔄 SYSTEM: Setting up video completion handler")
         videoManager.onVideoComplete = { [self] index in
-            logger.debug("🎬 VIDEO COMPLETION HANDLER: Auto-advance triggered for completed video at index \(index)")
-            logger.debug("📊 QUEUE POSITION: Video \(index + 1) of \(viewModel.videos.count) in queue")
+            logger.info("🎬 VIDEO COMPLETION HANDLER: Auto-advance triggered for completed video at index \(index)")
+            logger.info("📊 QUEUE POSITION: Video \(index + 1) of \(viewModel.videos.count) in queue")
             
             guard !isGestureActive else {
-                logger.debug("⚠️ AUTO-ADVANCE CANCELLED: Active gesture detected during video completion at index \(index)")
+                logger.info("⚠️ AUTO-ADVANCE CANCELLED: Active gesture detected during video completion at index \(index)")
                 return
             }
             
@@ -215,7 +232,7 @@ struct VideoPlaybackView: View {
                 // First animate the swipe up
                 withAnimation(.easeInOut(duration: 0.3)) {
                     autoAdvanceOffset = -UIScreen.main.bounds.height * 0.3
-                    logger.debug("🔄 AUTO-ADVANCE ANIMATION: Started swipe-up animation for completed video \(index)")
+                    logger.info("🔄 AUTO-ADVANCE ANIMATION: Started swipe-up animation for completed video \(index)")
                 }
                 
                 // Wait for animation to complete
@@ -225,15 +242,15 @@ struct VideoPlaybackView: View {
                 withAnimation {
                     if let current = currentIndex, current == index {
                         let nextIndex = index + 1
-                        logger.debug("🎯 AUTO-ADVANCE TRANSITION: Moving from completed video \(index) to next video \(nextIndex)")
+                        logger.info("🎯 AUTO-ADVANCE TRANSITION: Moving from completed video \(index) to next video \(nextIndex)")
                         if nextIndex < viewModel.videos.count {
-                            logger.debug("📊 QUEUE STATUS: \(viewModel.videos.count - (nextIndex + 1)) videos remaining after auto-advance")
+                            logger.info("📊 QUEUE STATUS: \(viewModel.videos.count - (nextIndex + 1)) videos remaining after auto-advance")
                             currentIndex = nextIndex
                             // Reset the offset for the next video
                             autoAdvanceOffset = 0
-                            logger.debug("✅ AUTO-ADVANCE COMPLETE: Successfully transitioned to video \(nextIndex)")
+                            logger.info("✅ AUTO-ADVANCE COMPLETE: Successfully transitioned to video \(nextIndex)")
                         } else {
-                            logger.debug("⚠️ QUEUE END REACHED: No more videos available after index \(index)")
+                            logger.info("⚠️ QUEUE END REACHED: No more videos available after index \(index)")
                         }
                     }
                 }
@@ -246,11 +263,11 @@ struct VideoPlaybackView: View {
             .updating($dragState) { _, state, _ in
                 state = true
                 isGestureActive = true
-                logger.debug("🖐️ Drag gesture active")
+                logger.info("🖐️ Drag gesture active")
             }
             .onChanged { value in
                 dragOffset = value.translation.height
-                logger.debug("👤 USER ACTION: Dragging with offset \(dragOffset)")
+                logger.info("👤 USER ACTION: Dragging with offset \(dragOffset)")
             }
             .onEnded { value in
                 let height = geometry.size.height
@@ -261,8 +278,8 @@ struct VideoPlaybackView: View {
                         // Swipe up
                         if let current = currentIndex,
                            current < viewModel.videos.count - 1 {
-                            logger.debug("👤 USER ACTION: Manual swipe up to next video from index \(current)")
-                            logger.debug("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
+                            logger.info("👤 USER ACTION: Manual swipe up to next video from index \(current)")
+                            logger.info("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
                             withAnimation {
                                 currentIndex = current + 1
                             }
@@ -271,8 +288,8 @@ struct VideoPlaybackView: View {
                         // Swipe down
                         if let current = currentIndex,
                            current > 0 {
-                            logger.debug("👤 USER ACTION: Manual swipe down to previous video from index \(current)")
-                            logger.debug("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
+                            logger.info("👤 USER ACTION: Manual swipe down to previous video from index \(current)")
+                            logger.info("📊 SWIPE STATS: Swipe distance: \(abs(value.translation.height))px, velocity: \(abs(value.velocity.height))px/s")
                             withAnimation {
                                 currentIndex = current - 1
                             }
@@ -282,14 +299,14 @@ struct VideoPlaybackView: View {
                 
                 dragOffset = 0
                 isGestureActive = false
-                logger.debug("🖐️ Drag gesture ended")
+                logger.info("🖐️ Drag gesture ended")
             }
     }
     
     private func createTapGesture(_ index: Int) -> some Gesture {
         TapGesture()
             .onEnded {
-                logger.debug("👤 USER ACTION: Manual play/pause tap on video \(index)")
+                logger.info("👤 USER ACTION: Manual play/pause tap on video \(index)")
                 videoManager.togglePlayPauseAction(index: index)
             }
     }
@@ -304,7 +321,8 @@ struct VideoPlaybackView_Previews: PreviewProvider {
                 thumbnailUrl: nil,
                 timestamp: Timestamp(date: Date())
             ),
-            initialIndex: 0
+            initialIndex: 0,
+            videos: []
         )
     }
 } 

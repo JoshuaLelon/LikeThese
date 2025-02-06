@@ -7,7 +7,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             if authService.isAuthenticated {
-                VideoPlaybackView()
+                InspirationsGridView()
                     .overlay(alignment: .topTrailing) {
                         signOutButton
                     }

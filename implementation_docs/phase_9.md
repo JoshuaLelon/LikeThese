@@ -1,37 +1,4 @@
 ## Phase 9: Inspirations Board
 ### Checklist
-[ ] Implement a 2x2 grid view for recommended videos.  
-
-### File Structure Tree once implemented
-LikeThese/
-├── LikeThese
-│   ├── Views
-│   │   └── InspirationsGridView.swift
-│   └── (other Swift/UI files)
-└── (remaining project files)
-
-### Files from another repository to use for inspiration:
-- TikTok-Clone/Controllers/Discover/DiscoverVC.swift  
-  • Implementation details for a grid or collection-based UI  
-
-#### `TikTok-Clone/Controllers/Discover/DiscoverVC.swift`
-```swift:TikTok-Clone/Controllers/Discover/DiscoverVC.swift
-import UIKit
-import FirebaseFirestore
-
-function handleAuthStatus() {
-    // Suppose we have a user session; we might refresh
-    // the view to show personalized content.
-
-    Firestore.firestore().collection("videos").getDocuments { snapshot, error in
-        if let error = error {
-            print("Error refreshing videos: \(error.localizedDescription)")
-            return
-        }
-        let documents = snapshot?.documents ?? []
-        // Update the UI to reflect the newly fetched videos
-        print("Refreshed content for user: \(documents.count) videos found.")
-    }
-}
-```
-
+- [PROGRESS] Implement a 2x2 grid view for recommended videos. This will be the new "homepage" after a user logs in. The 4 videos it loads can be random for now. When I press on one of the videos, it should go to that video and play it.
+- [ ] Make it so that when a video is playing, I can swipe to the right and it will go back to the inspiration board (the 2x2 grid view).

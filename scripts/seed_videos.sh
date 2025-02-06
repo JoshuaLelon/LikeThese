@@ -8,9 +8,16 @@ THUMBNAIL_DIR="sample_data/thumbnails"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Function to print section header
+print_section() {
+    echo -e "\n${BLUE}=== $1 ===${NC}"
+}
+
 # Set up Python virtual environment if it doesn't exist
+print_section "Setting up environment"
 if [ ! -d "venv" ]; then
     echo -e "${YELLOW}Setting up Python virtual environment...${NC}"
     python3 -m venv venv
@@ -24,6 +31,7 @@ else
 fi
 
 # Check if Firebase CLI is installed and logged in
+print_section "Checking prerequisites"
 if ! command -v firebase &> /dev/null; then
     echo -e "${RED}Firebase CLI is not installed. Please install it first:${NC}"
     echo "npm install -g firebase-tools"
@@ -49,17 +57,19 @@ if ! firebase projects:list &> /dev/null; then
 fi
 
 # Get list of existing files in Firebase Storage
+print_section "Checking Firebase Storage"
 echo -e "${YELLOW}Checking existing files in Firebase Storage...${NC}"
 existing_videos=$(gsutil ls gs://likethese-fc23d.firebasestorage.app/videos/*.mp4 2>/dev/null)
 existing_thumbnails=$(gsutil ls gs://likethese-fc23d.firebasestorage.app/thumbnails/*.jpg 2>/dev/null)
-video_count=$(echo "$existing_videos" | wc -l)
-thumbnail_count=$(echo "$existing_thumbnails" | wc -l)
+video_count=$(echo "$existing_videos" | grep -c "^" || true)
+thumbnail_count=$(echo "$existing_thumbnails" | grep -c "^" || true)
 
 if [ "$video_count" -gt 0 ] && [ "$thumbnail_count" -gt 0 ]; then
-    echo -e "${GREEN}Found existing videos and thumbnails in Firebase Storage${NC}"
+    echo -e "${GREEN}✓ Found $video_count videos and $thumbnail_count thumbnails in Firebase Storage${NC}"
     echo -e "${YELLOW}Skipping video and thumbnail upload...${NC}"
     echo -e "${YELLOW}Proceeding to verify Firestore documents...${NC}"
 else
+    print_section "Processing local files"
     # Create directories if they don't exist
     mkdir -p "$VIDEO_DIR"
     mkdir -p "$THUMBNAIL_DIR"
@@ -88,11 +98,13 @@ else
         # Generate thumbnails for each video
         for video in "$VIDEO_DIR"/*.mp4; do
             basename=$(basename "$video" .mp4)
-            echo "Generating thumbnail for $basename..."
+            echo -e "${YELLOW}Generating thumbnail for $basename...${NC}"
             ffmpeg -i "$video" -vframes 1 "$THUMBNAIL_DIR/${basename}.jpg" -y
+            echo -e "${GREEN}✓ Generated thumbnail for $basename${NC}"
         done
     fi
 
+    print_section "Uploading to Firebase Storage"
     echo -e "${GREEN}Starting upload to Firebase...${NC}"
 
     # Upload videos and thumbnails
@@ -100,7 +112,7 @@ else
         basename=$(basename "$video" .mp4)
         thumbnail="$THUMBNAIL_DIR/${basename}.jpg"
         
-        echo "Processing $basename..."
+        echo -e "\n${YELLOW}Processing $basename...${NC}"
         
         # Upload video
         echo "Uploading video $basename..."
@@ -108,6 +120,7 @@ else
             echo -e "${RED}Failed to upload video $basename${NC}"
             continue
         fi
+        echo -e "${GREEN}✓ Uploaded video $basename${NC}"
         
         # Upload thumbnail
         echo "Uploading thumbnail for $basename..."
@@ -115,12 +128,14 @@ else
             echo -e "${RED}Failed to upload thumbnail for $basename${NC}"
             continue
         fi
+        echo -e "${GREEN}✓ Uploaded thumbnail for $basename${NC}"
         
-        echo -e "${GREEN}Successfully uploaded $basename${NC}"
+        echo -e "${GREEN}✓ Successfully processed $basename${NC}"
     done
 fi
 
 # Verify and create Firestore documents if needed
+print_section "Managing Firestore Documents"
 echo -e "${GREEN}Checking and creating Firestore documents...${NC}"
 echo "$existing_videos" | while read -r video; do
     [ -z "$video" ] && continue
@@ -144,16 +159,16 @@ echo "$existing_videos" | while read -r video; do
 done
 
 # Print summary
-echo -e "\n${YELLOW}Summary:${NC}"
-echo -e "Videos in Storage: $video_count"
-echo -e "Thumbnails in Storage: $thumbnail_count"
-echo -e "\nVideo files:"
+print_section "Summary"
+echo -e "Videos in Storage: ${GREEN}$video_count${NC}"
+echo -e "Thumbnails in Storage: ${GREEN}$thumbnail_count${NC}"
+echo -e "\n${YELLOW}Video files:${NC}"
 echo "$existing_videos"
-echo -e "\nThumbnail files:"
+echo -e "\n${YELLOW}Thumbnail files:${NC}"
 echo "$existing_thumbnails"
 
 # Print all Firestore documents
-echo -e "\n${YELLOW}Current Firestore documents:${NC}"
+print_section "Current Firestore Documents"
 node scripts/update_firestore.js list
 
-echo -e "\n${GREEN}Verification complete!${NC}" 
+echo -e "\n${GREEN}✓ Verification complete!${NC}" 

@@ -116,11 +116,58 @@ class FirestoreService {
         logger.debug("🔄 Validating video data for document: \(documentId)")
         logger.debug("📄 Document data: \(data)")
         
-        // Get video URL - either from direct URL or storage path
+        // First try to use signed URLs if available
+        if let signedVideoUrl = data["signedVideoUrl"] as? String,
+           let signedThumbnailUrl = data["signedThumbnailUrl"] as? String {
+            logger.debug("✅ Using pre-signed URLs")
+            let video = Video(
+                id: documentId,
+                url: signedVideoUrl,
+                thumbnailUrl: signedThumbnailUrl,
+                timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
+            )
+            logger.debug("📄 Video URL: \(signedVideoUrl)")
+            logger.debug("📄 Thumbnail URL: \(signedThumbnailUrl)")
+            return video
+        }
+        
+        // Fallback to generating signed URLs from paths
+        if let videoPath = data["videoPath"] as? String {
+            let videoURL = try await getSignedURL(for: videoPath).absoluteString
+            let thumbnailURL = try? await getSignedURL(for: data["thumbnailPath"] as? String ?? "").absoluteString
+            
+            let video = Video(
+                id: documentId,
+                url: videoURL,
+                thumbnailUrl: thumbnailURL,
+                timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
+            )
+            logger.debug("✅ Generated new signed URLs from paths")
+            logger.debug("📄 Video URL: \(videoURL)")
+            if let thumbURL = thumbnailURL {
+                logger.debug("📄 Thumbnail URL: \(thumbURL)")
+            }
+            return video
+        }
+        
+        // Legacy fallback for old documents
         let videoURL: String
-        if let directURL = data["url"] as? String {
-            videoURL = directURL
-            logger.debug("✅ Using direct video URL")
+        if let url = data["url"] as? String {
+            // Convert storage URL to storage path
+            if url.contains("storage.googleapis.com") {
+                let components = url.components(separatedBy: "/videos/")
+                if let filename = components.last {
+                    let storagePath = "videos/\(filename)"
+                    videoURL = try await getSignedURL(for: storagePath).absoluteString
+                    logger.debug("✅ Generated signed URL from storage URL")
+                } else {
+                    logger.error("❌ Invalid video URL format: \(url)")
+                    throw FirestoreError.invalidVideoURL(url)
+                }
+            } else {
+                videoURL = url
+                logger.debug("✅ Using direct video URL")
+            }
         } else if let videoFilePath = data["videoFilePath"] as? String {
             videoURL = try await getSignedURL(for: videoFilePath).absoluteString
             logger.debug("✅ Generated signed URL from storage path")
@@ -131,9 +178,22 @@ class FirestoreService {
         
         // Get thumbnail URL - either from direct URL or storage path
         let thumbnailURL: String?
-        if let directURL = data["thumbnailUrl"] as? String {
-            thumbnailURL = directURL
-            logger.debug("✅ Using direct thumbnail URL")
+        if let url = data["thumbnailUrl"] as? String {
+            // Convert storage URL to storage path
+            if url.contains("storage.googleapis.com") {
+                let components = url.components(separatedBy: "/thumbnails/")
+                if let filename = components.last {
+                    let storagePath = "thumbnails/\(filename)"
+                    thumbnailURL = try await getSignedURL(for: storagePath).absoluteString
+                    logger.debug("✅ Generated signed thumbnail URL from storage URL")
+                } else {
+                    logger.error("⚠️ Invalid thumbnail URL format: \(url), continuing without thumbnail")
+                    thumbnailURL = nil
+                }
+            } else {
+                thumbnailURL = url
+                logger.debug("✅ Using direct thumbnail URL")
+            }
         } else if let thumbnailPath = data["thumbnailFilePath"] as? String {
             do {
                 thumbnailURL = try await getSignedURL(for: thumbnailPath).absoluteString
@@ -155,6 +215,10 @@ class FirestoreService {
         )
         
         logger.debug("✅ Successfully validated video data for: \(documentId)")
+        logger.debug("📄 Video URL: \(videoURL)")
+        if let thumbURL = thumbnailURL {
+            logger.debug("📄 Thumbnail URL: \(thumbURL)")
+        }
         return video
     }
     

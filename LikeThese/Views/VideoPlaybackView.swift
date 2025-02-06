@@ -22,8 +22,13 @@ struct VideoPlaybackView: View {
     @State private var isInitialLoad = true
     @State private var autoAdvanceOffset: CGFloat = 0
     
-    init() {
-        logger.debug("📱 VideoPlaybackView initialized")
+    let initialVideo: Video
+    let initialIndex: Int
+    
+    init(initialVideo: Video, initialIndex: Int) {
+        self.initialVideo = initialVideo
+        self.initialIndex = initialIndex
+        logger.debug("📱 VideoPlaybackView initialized with video: \(initialVideo.id) at index: \(initialIndex)")
     }
     
     var body: some View {
@@ -38,10 +43,9 @@ struct VideoPlaybackView: View {
             Task {
                 await viewModel.loadInitialVideos()
                 if isInitialLoad {
-                    // Set initial index only on first load
-                    currentIndex = 0
+                    currentIndex = initialIndex
                     isInitialLoad = false
-                    logger.debug("🎯 VIEW STATE: Setting initial index to 0 on first load")
+                    logger.debug("🎯 VIEW STATE: Setting initial index to \(initialIndex)")
                 }
             }
             setupVideoCompletion()
@@ -293,6 +297,14 @@ struct VideoPlaybackView: View {
 
 struct VideoPlaybackView_Previews: PreviewProvider {
     static var previews: some View {
-        VideoPlaybackView()
+        VideoPlaybackView(
+            initialVideo: Video(
+                id: "1",
+                url: "https://example.com/video1.mp4",
+                thumbnailUrl: nil,
+                timestamp: Timestamp(date: Date())
+            ),
+            initialIndex: 0
+        )
     }
 } 

@@ -123,8 +123,25 @@ LikeThese/
 - Already uploaded videos will be skipped
 
 ## Debugging & Logs
-If you need to view simulator logs for **LikeThese**, run:
+If you need to view simulator logs for **LikeThese** in real time, run:
+```bash
+xcrun simctl spawn booted log stream --predicate 'process contains "LikeThese"' --debug --info
+```
+This outputs logs continuously while the app is running in the simulator.
+
+If you need to view logs from the *past* 5 minutes, use:
 ```bash
 xcrun simctl spawn booted log show --predicate 'process contains "LikeThese"' --debug --info --last 5m
 ```
-This displays the logs (including video completion events) from the last 5 minutes.
+
+### Excluding Extra Messages (e.g., AudioToolbox, VisionKit, CFNetwork)
+If you see other frameworks spamming your logs, you can chain multiple exclude conditions:
+```bash
+xcrun simctl spawn booted log stream \
+  --predicate 'process contains "LikeThese" 
+    AND NOT eventMessage CONTAINS "AudioToolbox" 
+    AND NOT eventMessage CONTAINS "VisionKit" 
+    AND NOT eventMessage CONTAINS "CFNetwork" 
+    AND NOT eventMessage CONTAINS "CoreFoundation"' \
+  --debug --info
+```

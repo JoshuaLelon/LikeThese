@@ -357,14 +357,41 @@ xcrun simctl spawn booted log show --predicate 'process contains "LikeThese"' --
 Adjust the duration (`--last 5m`) or the predicate as needed to see more logs or focus on a specific timeframe.
 
 ### Live-Streaming Logs
-Use the streaming command to see real-time output from the **LikeThese** simulator process:
+Use this to see real-time output from the **LikeThese** simulator process:
 ```bash
 xcrun simctl spawn booted log stream --predicate 'process contains "LikeThese"' --debug --info
 ```
-This shows ongoing logs as they occur. To see historical logs for the past 5 minutes, use:
+To see historical logs for the past 5 minutes:
 ```bash
 xcrun simctl spawn booted log show --predicate 'process contains "LikeThese"' --debug --info --last 5m
 ```
+
+### Excluding Extra Messages
+If you notice spammy logs from subsystems like **AudioToolbox**, exclude them:
+```bash
+xcrun simctl spawn booted log stream \
+  --predicate 'process contains "LikeThese" AND NOT eventMessage CONTAINS "AudioToolbox"' \
+  --debug --info
+```
+Or for historical logs:
+```bash
+xcrun simctl spawn booted log show \
+  --predicate 'process contains "LikeThese" AND NOT eventMessage CONTAINS "AudioToolbox"' \
+  --debug --info --last 5m
+```
+
+### Excluding Multiple Frameworks at Once
+If logs from external frameworks like AudioToolbox, VisionKit, CFNetwork, or CoreFoundation clutter your console, chain your excludes:
+```bash
+xcrun simctl spawn booted log stream \
+  --predicate 'process contains "LikeThese" 
+    AND NOT eventMessage CONTAINS "AudioToolbox" 
+    AND NOT eventMessage CONTAINS "VisionKit" 
+    AND NOT eventMessage CONTAINS "CFNetwork" 
+    AND NOT eventMessage CONTAINS "CoreFoundation"' \
+  --debug --info
+```
+This shows only **LikeThese** logs, excluding all unwanted frameworks.  
 
 
 

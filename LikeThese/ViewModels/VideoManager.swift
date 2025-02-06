@@ -12,6 +12,7 @@ class VideoManager: NSObject, ObservableObject {
     private var timeObservers: [Int: (observer: Any, player: AVPlayer)] = [:]  // Track observers with their players
     private var endTimeObservers: [Int: (observer: Any, player: AVPlayer)] = [:]  // Track end-time observers with their players
     private var playerItems: [Int: AVPlayerItem] = [:]
+    private var completedVideos: Set<Int> = [] // Track which videos have completed
     private let videoCacheService = VideoCacheService.shared
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
@@ -216,12 +217,18 @@ class VideoManager: NSObject, ObservableObject {
         }
     }
     
-    private func setupStateObserver(for player: AVPlayer, at index: Int) {
-        // Use periodic time observer to check state
-        let interval = CMTime(value: 1, timescale: 10) // 0.1 seconds with integer values
-        let observer = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] _ in
-            guard let self = self else { return }
+    private func setupEndTimeObserver(for player: AVPlayer, at index: Int) {
+        // Reset completion state when setting up new observer
+        completedVideos.remove(index)
+        
+        // Add observer for video end and state changes
+        let observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] time in
+            guard let self = self,
+                  let currentItem = player.currentItem,
+                  !CMTimeGetSeconds(time).isNaN,
+                  !CMTimeGetSeconds(currentItem.duration).isNaN else { return }
             
+            // Handle state changes
             let newState = player.timeControlStatus
             let oldState = self.playerStates[index]
             
@@ -231,6 +238,12 @@ class VideoManager: NSObject, ObservableObject {
                 stateStr = "playing"
                 if oldState != "playing" {
                     logger.debug("✅ PLAYBACK SUCCESS: Video \(index) successfully started playing")
+                    // Reset completion state when video starts playing from beginning
+                    let currentTime = CMTimeGetSeconds(time)
+                    if currentTime < 1.0 {
+                        completedVideos.remove(index)
+                        logger.debug("🔄 COMPLETION STATE: Reset completion state for video \(index) - starting from beginning")
+                    }
                 }
             case .paused:
                 stateStr = "paused"
@@ -253,35 +266,51 @@ class VideoManager: NSObject, ObservableObject {
                 logger.debug("🎮 PLAYER STATE: Video \(index) state changed: \(oldState ?? "none") -> \(stateStr)")
                 self.playerStates[index] = stateStr
             }
-        }
-        
-        // Store the observer
-        endTimeObservers[index] = (observer: observer, player: player)
-    }
-    
-    private func setupEndTimeObserver(for player: AVPlayer, at index: Int) {
-        // Add observer for video end
-        let observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] time in
-            guard let self = self,
-                  let currentItem = player.currentItem,
-                  !CMTimeGetSeconds(time).isNaN,
-                  !CMTimeGetSeconds(currentItem.duration).isNaN else { return }
             
+            // Handle video completion
             let currentTime = CMTimeGetSeconds(time)
             let duration = CMTimeGetSeconds(currentItem.duration)
-            let isNearEnd = currentTime >= duration - 0.1
+            let timeRemaining = duration - currentTime
+            let isNearEnd = timeRemaining <= 0.15 // Slightly more lenient end detection
             
-            if isNearEnd && player.timeControlStatus == .playing {
+            // Calculate what percentage of the video has been played
+            let percentagePlayed = (currentTime / duration) * 100
+            
+            // Only trigger completion if:
+            // 1. Video is near the end
+            // 2. Video is currently playing
+            // 3. We haven't already marked this video as completed
+            // 4. We've watched at least 50% of the video (instead of fixed 2 seconds)
+            // 5. Player is not seeking/scrubbing
+            if isNearEnd && 
+               player.timeControlStatus == .playing && 
+               !completedVideos.contains(index) && 
+               percentagePlayed >= 50 &&
+               currentItem.status == .readyToPlay {
+                
+                // Double check we're really at the end by comparing with duration
+                let actualTimeRemaining = duration - currentTime
+                guard actualTimeRemaining <= 0.15 else {
+                    logger.debug("⚠️ COMPLETION CHECK: False end detection for video \(index) - actual time remaining: \(String(format: "%.2f", actualTimeRemaining))s")
+                    return
+                }
+                
+                // Mark video as completed
+                completedVideos.insert(index)
+                
                 // Explicit video completion logging
                 logger.debug("🎬 VIDEO COMPLETED: Video at index \(index) has finished playing completely")
                 logger.debug("📊 VIDEO COMPLETION STATS: Video \(index) reached its end after \(String(format: "%.1f", duration))s total playback time")
+                logger.debug("📊 VIDEO COMPLETION STATS: Watched \(String(format: "%.1f", percentagePlayed))% of video")
                 logger.debug("🔄 VIDEO COMPLETION ACTION: Video \(index) finished naturally while playing - initiating auto-advance sequence")
                 
                 // Pause the current video to prevent looping
                 player.pause()
                 
-                // Trigger completion callback
-                self.onVideoComplete?(index)
+                // Trigger completion callback after a short delay to ensure pause takes effect
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.onVideoComplete?(index)
+                }
             }
         }
         
@@ -439,15 +468,21 @@ class VideoManager: NSObject, ObservableObject {
             if key != index {
                 player.pause()
                 logger.debug("🔄 SYSTEM: Paused player at index \(key)")
-            } else {
+            } else if !completedVideos.contains(key) {
+                // Only play if the video hasn't completed
                 logger.debug("🔄 SYSTEM: Playing video at index \(key)")
                 player.play()
+            } else {
+                logger.debug("⏸️ SYSTEM: Not playing completed video at index \(key)")
             }
         }
     }
     
     func cleanupVideo(for index: Int) {
         logger.debug("🧹 CLEANUP: Starting cleanup for video \(index)")
+        
+        // Clear completion state
+        completedVideos.remove(index)
         
         // Store the player item before cleanup if it exists
         if let player = players[index], let item = player.currentItem {
@@ -494,6 +529,8 @@ class VideoManager: NSObject, ObservableObject {
     func seekToBeginning(at index: Int) async {
         if let player = players[index] {
             logger.debug("⏪ PLAYBACK ACTION: Seeking video \(index) to beginning")
+            // Reset completion state when seeking to beginning
+            completedVideos.remove(index)
             await player.seek(to: CMTime.zero)
             player.play()
             logger.debug("▶️ PLAYBACK ACTION: Restarted video \(index) from beginning")

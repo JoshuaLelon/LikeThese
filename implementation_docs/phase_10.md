@@ -10,30 +10,30 @@
         - [x] Eliminates excess space around grid edges
         - [x] Provides sufficient touch targets between videos
 
-[x] **Multi-Video Swipe Gestures**
-    - Two-Video Swipe:
-        - [x] Detect swipe up gesture in space between any two adjacent videos
-        - [x] Implement 35% swipe distance threshold
-        - [x] Remove only the two videos touching the swiped space
-        - [x] Synchronize upward animation for both affected videos
-    - Four-Video Center Swipe:
-        - [x] Detect swipe up gesture in center space where all four videos meet
-        - [x] Implement 40% swipe distance threshold
-        - [x] Remove all four videos simultaneously
-        - [x] Synchronize upward animation for all videos
-
-[x] **Video Replacement System**
+[ ] **Video Replacement System**
     - Sequential Video Loading:
-        - [x] Fetch and load new videos one at a time
-        - [x] Show loading state for each empty slot
-        - [x] Preload thumbnails when possible
-        - [x] Maintain grid stability during replacements
+        - [ ] Fetch and load new videos one at a time
+        - [ ] Show loading state for each empty slot
+        - [ ] Preload thumbnails when possible
+        - [ ] Maintain grid stability during replacements
 
-[x] **Visual Feedback**
-    - [x] Add opacity changes during swipe gestures
-    - [x] Implement smooth upward animations matching existing style
-    - [x] Add haptic feedback on successful removals
-    - [x] Show loading indicators during video replacements
+[ ] **Multi-Video Swipe Gestures**
+    - Four-Video Center Swipe:
+        - [ ] Detect swipe up gesture in center space where all four videos meet
+        - [ ] Implement 40% swipe distance threshold
+        - [ ] Remove all four videos simultaneously
+        - [ ] Synchronize upward animation for all videos
+    - Two-Video Swipe:
+        - [ ] Detect swipe up gesture in space between any two adjacent videos
+        - [ ] Implement 35% swipe distance threshold
+        - [ ] Remove only the two videos touching the swiped space
+        - [ ] Synchronize upward animation for both affected videos
+
+[ ] **Visual Feedback**
+    - [ ] Add opacity changes during swipe gestures
+    - [ ] Implement smooth upward animations matching existing style
+    - [ ] Add haptic feedback on successful removals
+    - [ ] Show loading indicators during video replacements
 
 ### Implementation Issues and Solutions
 

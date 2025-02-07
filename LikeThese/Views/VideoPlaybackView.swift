@@ -234,9 +234,7 @@ struct VideoPlaybackView: View {
     
     private func handleSwipeDown() {
         guard let current = currentIndex,
-              current - 1 >= 0,
-              let previousVideo = videos[safe: current - 1],
-              let url = URL(string: previousVideo.url) else {
+              current - 1 >= 0 else {
             return
         }
         
@@ -251,19 +249,38 @@ struct VideoPlaybackView: View {
                         incomingOffset = -UIScreen.main.bounds.height
                     }
                 }
-
-                // Ensure previous video is preloaded and ready
-                try await videoManager.preloadVideo(url: url, forIndex: current - 1)
                 
-                // Ensure player is ready and start playing
-                if let player = videoManager.player(for: current - 1) {
-                    // Seek to start and prepare for playback
-                    await player.seek(to: .zero)
-                    player.playImmediately(atRate: 1.0)
+                // Try to get previous video from sequence
+                if let previousVideo = viewModel.getPreviousVideo(from: current),
+                   let url = URL(string: previousVideo.url) {
+                    // Ensure previous video is preloaded and ready
+                    try await videoManager.preloadVideo(url: url, forIndex: current - 1)
                     
-                    // Start playing before animation
-                    videoManager.startPlaying(at: current - 1)
-                    logger.info("▶️ SWIPE DOWN: Started playing video at index \(current - 1)")
+                    // Ensure player is ready and start playing
+                    if let player = videoManager.player(for: current - 1) {
+                        // Seek to start and prepare for playback
+                        await player.seek(to: .zero)
+                        player.playImmediately(atRate: 1.0)
+                        
+                        // Start playing before animation
+                        videoManager.startPlaying(at: current - 1)
+                        logger.info("▶️ SWIPE DOWN: Started playing previous video at index \(current - 1)")
+                    }
+                } else {
+                    // Fallback to loading a new video
+                    logger.info("⚠️ Previous video not found in sequence, loading new video")
+                    let newVideo = try await viewModel.loadRandomVideo(at: current - 1)
+                    
+                    if let url = URL(string: newVideo.url) {
+                        try await videoManager.preloadVideo(url: url, forIndex: current - 1)
+                        
+                        if let player = videoManager.player(for: current - 1) {
+                            await player.seek(to: .zero)
+                            player.playImmediately(atRate: 1.0)
+                            videoManager.startPlaying(at: current - 1)
+                            logger.info("▶️ SWIPE DOWN: Started playing new video at index \(current - 1)")
+                        }
+                    }
                 }
 
                 // Animate the transition
@@ -286,7 +303,8 @@ struct VideoPlaybackView: View {
                 videoManager.endTransition()
 
                 // Preload the previous video if available
-                if let prevPrevVideo = videos[safe: current - 2],
+                if current - 2 >= 0,
+                   let prevPrevVideo = viewModel.getPreviousVideo(from: current - 1),
                    let prevUrl = URL(string: prevPrevVideo.url) {
                     try await videoManager.preloadVideo(url: prevUrl, forIndex: current - 2)
                 }

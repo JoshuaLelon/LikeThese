@@ -630,3 +630,155 @@ function handleUserNotifications() {
         }
 }
 ```
+
+#### Issue 9: Grid Video State Preservation
+**Problem**: When returning to the grid from video playback, videos show "Failed to load" errors. This occurs because the grid's video state is being completely replaced instead of preserved.
+
+**Relevant Logs**:
+```
+🔄 Grid updated with 4 videos
+❌ Failed to load video at index 2
+❌ Failed to load video at index 3
+```
+
+The issue occurs because:
+1. `loadMoreVideosIfNeeded` replaces all videos instead of maintaining state
+2. Video state is lost during navigation
+3. Grid updates trigger unnecessary video replacements
+
+**Solution Plan**:
+1. Modify video loading to preserve existing videos
+2. Implement proper state restoration
+3. Add video state caching
+4. Optimize grid updates
+
+Before:
+```swift
+func loadMoreVideosIfNeeded(currentIndex: Int) async {
+    if currentIndex >= videos.count - 3 && !isLoadingMore {
+        isLoadingMore = true
+        do {
+            var newVideos: [Video] = []
+            for _ in 0..<pageSize {
+                let newVideo = try await firestoreService.fetchRandomVideo()
+                newVideos.append(newVideo)
+            }
+            await MainActor.run {
+                videos = newVideos // Complete replacement
+            }
+        } catch {
+            self.error = error
+        }
+        isLoadingMore = false
+    }
+}
+```
+
+After:
+```swift
+func loadMoreVideosIfNeeded(currentIndex: Int) async {
+    if currentIndex >= videos.count - 3 && !isLoadingMore {
+        isLoadingMore = true
+        do {
+            let existingCount = videos.count
+            let neededCount = max(0, pageSize - existingCount)
+            
+            if neededCount > 0 {
+                var newVideos = videos // Preserve existing
+                for _ in 0..<neededCount {
+                    let video = try await firestoreService.fetchRandomVideo()
+                    newVideos.append(video)
+                }
+                
+                await MainActor.run {
+                    videos = newVideos.prefix(pageSize).map { $0 }
+                }
+            }
+        } catch {
+            self.error = error
+        }
+        isLoadingMore = false
+    }
+}
+```
+
+This solution will work because:
+1. Existing videos are preserved during updates
+2. Only missing videos are fetched
+3. Grid state is maintained during navigation
+4. Updates are optimized to minimize unnecessary loads
+
+#### Issue 10: Video Navigation Sequence Preservation
+**Problem**: Swiping down to view previous video shows an unexpected video instead of the actual previous video.
+
+**Relevant Logs**:
+```
+▶️ SWIPE DOWN: Started playing video at index 1
+🔄 PRELOAD: Loading new random video instead of previous
+```
+
+The issue occurs because:
+1. Video sequence isn't being preserved
+2. Navigation state is lost during transitions
+3. Random videos are loaded instead of maintaining sequence
+
+**Solution Plan**:
+1. Implement video sequence tracking
+2. Cache previous video states
+3. Optimize navigation state preservation
+4. Add proper state restoration
+
+Before:
+```swift
+@Published var videos: [Video] = []
+
+func loadMoreVideosIfNeeded(currentIndex: Int) async {
+    // Current implementation replaces all videos
+}
+```
+
+After:
+```swift
+@Published var videos: [Video] = []
+private var videoSequence: [String: Video] = [:] // Cache for sequence
+
+func preserveVideoSequence(_ video: Video, at index: Int) {
+    videoSequence["\(index)"] = video
+}
+
+func getPreviousVideo(from index: Int) -> Video? {
+    return videoSequence["\(index - 1)"]
+}
+
+func loadMoreVideosIfNeeded(currentIndex: Int) async {
+    if currentIndex >= videos.count - 3 && !isLoadingMore {
+        isLoadingMore = true
+        do {
+            let existingCount = videos.count
+            let neededCount = max(0, pageSize - existingCount)
+            
+            if neededCount > 0 {
+                var newVideos = videos
+                for _ in 0..<neededCount {
+                    let video = try await firestoreService.fetchRandomVideo()
+                    newVideos.append(video)
+                    preserveVideoSequence(video, at: newVideos.count - 1)
+                }
+                
+                await MainActor.run {
+                    videos = newVideos.prefix(pageSize).map { $0 }
+                }
+            }
+        } catch {
+            self.error = error
+        }
+        isLoadingMore = false
+    }
+}
+```
+
+This solution will work because:
+1. Video sequence is preserved in cache
+2. Navigation state is maintained
+3. Previous videos can be restored
+4. Transitions are properly handled

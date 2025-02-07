@@ -15,6 +15,7 @@ class VideoViewModel: ObservableObject {
     @Published private var loadingVideoIds: Set<String> = []
     private let firestoreService = FirestoreService.shared
     private let pageSize = 4 // Only load 4 at a time
+    private var videoSequence: [Int: Video] = [:] // Track video sequence
     
     func isLoadingVideo(_ videoId: String) -> Bool {
         return loadingVideoIds.contains(videoId)
@@ -34,9 +35,14 @@ class VideoViewModel: ObservableObject {
         error = nil
         
         do {
-            // Load initial set of videos
             let initialVideos = try await firestoreService.fetchInitialVideos(limit: pageSize)
             logger.debug("✅ Loaded \(initialVideos.count) initial videos")
+            
+            // Store initial sequence
+            for (index, video) in initialVideos.enumerated() {
+                videoSequence[index] = video
+            }
+            
             videos = initialVideos
         } catch {
             logger.error("❌ Error loading initial videos: \(error.localizedDescription)")
@@ -47,41 +53,72 @@ class VideoViewModel: ObservableObject {
     }
     
     func loadMoreVideosIfNeeded(currentIndex: Int) async {
-        // Load a batch of videos when we're 3 videos away from the end
-        if currentIndex >= videos.count - 3 && !isLoadingMore {
-            logger.debug("📥 Loading batch of videos after index \(currentIndex)")
-            isLoadingMore = true
-            error = nil
+        guard currentIndex >= videos.count - 3 && !isLoadingMore else { return }
+        
+        logger.debug("📥 Loading more videos after index \(currentIndex)")
+        isLoadingMore = true
+        error = nil
+        
+        do {
+            // Keep existing videos
+            var updatedVideos = videos
             
-            do {
-                // Load a batch of random videos
-                var newVideos: [Video] = []
-                for _ in 0..<pageSize {
+            // Calculate how many new videos we need
+            let neededCount = pageSize - updatedVideos.count
+            
+            if neededCount > 0 {
+                for _ in 0..<neededCount {
                     let newVideo = try await firestoreService.fetchRandomVideo()
-                    newVideos.append(newVideo)
+                    updatedVideos.append(newVideo)
+                    // Store in sequence
+                    videoSequence[updatedVideos.count - 1] = newVideo
                 }
-                logger.debug("✅ Loaded \(newVideos.count) random videos")
-                videos.append(contentsOf: newVideos)
-            } catch {
-                logger.error("❌ Error loading random videos: \(error.localizedDescription)")
-                self.error = error
+                
+                logger.debug("✅ Added \(neededCount) new videos")
+                
+                // Update atomically
+                videos = updatedVideos
             }
-            
-            isLoadingMore = false
+        } catch {
+            logger.error("❌ Error loading more videos: \(error.localizedDescription)")
+            self.error = error
         }
+        
+        isLoadingMore = false
+    }
+    
+    func getPreviousVideo(from index: Int) -> Video? {
+        return videoSequence[index - 1]
+    }
+    
+    func getNextVideo(from index: Int) -> Video? {
+        return videoSequence[index + 1]
+    }
+    
+    // Load a random video at a specific index
+    func loadRandomVideo(at index: Int) async throws -> Video {
+        let video = try await firestoreService.fetchRandomVideo()
+        await MainActor.run {
+            if index < videos.count {
+                videos[index] = video
+                videoSequence[index] = video
+            }
+        }
+        return video
     }
     
     // Add autoplay functionality
     func appendAutoplayVideo(_ video: Video) {
         logger.debug("📥 Appending autoplay video: \(video.id)")
+        let nextIndex = videos.count
         videos.append(video)
+        videoSequence[nextIndex] = video
     }
     
     // Add video removal functionality
     func removeVideo(_ videoId: String) async {
         if let index = videos.firstIndex(where: { $0.id == videoId }) {
             do {
-                // Set loading state
                 replacingVideoId = videoId
                 
                 // Fetch new video first
@@ -91,6 +128,10 @@ class VideoViewModel: ObservableObject {
                 var updatedVideos = videos
                 updatedVideos.remove(at: index)
                 updatedVideos.insert(newVideo, at: index)
+                
+                // Update sequence
+                videoSequence[index] = newVideo
+                
                 videos = updatedVideos
                 replacingVideoId = nil
             } catch {

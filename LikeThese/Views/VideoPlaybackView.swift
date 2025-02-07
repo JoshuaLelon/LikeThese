@@ -106,7 +106,7 @@ struct VideoPlaybackView: View {
                 videoManager.cleanup(context: .dismissal)
             }
         }
-        .onChange(of: videoManager.currentState) { newState in
+        .onChange(of: videoManager.currentState) { oldState, newState in
             // Only handle state changes when not in a transition
             if case .none = transitionState {
                 handleStateChange(newState)
@@ -188,7 +188,8 @@ struct VideoPlaybackView: View {
         let horizontalThreshold = geometry.size.width * 0.3
         let velocityX = value.predictedEndLocation.x - value.location.x
         let velocityY = value.predictedEndLocation.y - value.location.y
-        let velocityThreshold: CGFloat = 500
+        let distanceThreshold: CGFloat = UIScreen.main.bounds.height * 0.3
+        let velocityMultiplier: CGFloat = 0.3
         
         // Reset offsets if gesture doesn't meet threshold
         let resetOffsets = {
@@ -244,9 +245,10 @@ struct VideoPlaybackView: View {
                 // Begin gesture transition with immediate effect
                 videoManager.beginTransition(.gesture(from: current, to: current - 1)) {
                     Task { @MainActor in
+                        // Set initial state for animation
                         transitionState = .transitioning(from: current, to: current - 1)
-                        transitionOpacity = 1
-                        incomingOffset = -UIScreen.main.bounds.height
+                        transitionOpacity = 0  // Start with new video invisible
+                        incomingOffset = -UIScreen.main.bounds.height  // Position above
                     }
                 }
                 
@@ -256,28 +258,35 @@ struct VideoPlaybackView: View {
                     // Ensure previous video is preloaded and ready
                     try await videoManager.preloadVideo(url: url, forIndex: current - 1)
                     
-                    // Start playing immediately
+                    // Prepare next video but don't start playing yet
                     if let player = videoManager.player(for: current - 1) {
                         await player.seek(to: .zero)
+                    }
+                    
+                    // Animate old video down while bringing new video in
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        offset = UIScreen.main.bounds.height  // Move current video down
+                        incomingOffset = 0  // Bring new video to center
+                        transitionOpacity = 1  // Fade in new video
+                    }
+                    
+                    // Wait for animation to complete
+                    try await Task.sleep(nanoseconds: 300_000_000)
+                    
+                    // Start playing new video only after animation
+                    if let player = videoManager.player(for: current - 1) {
                         player.playImmediately(atRate: 1.0)
                         videoManager.startPlaying(at: current - 1)
                     }
                     
-                    // Quick animation
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        incomingOffset = 0
-                        transitionOpacity = 0
-                    }
-                    
-                    try await Task.sleep(nanoseconds: 200_000_000)
-                    
+                    // Capture videoManager before MainActor.run
+                    let manager = videoManager
                     await MainActor.run {
                         currentIndex = current - 1
                         transitionState = .none
-                        transitionOpacity = 1
+                        offset = 0  // Reset offset for next interaction
+                        manager.finishTransition(at: current - 1)
                     }
-                    
-                    videoManager.endTransition()
                 }
             } catch {
                 logger.error("❌ Failed to handle swipe down: \(error.localizedDescription)")
@@ -296,9 +305,10 @@ struct VideoPlaybackView: View {
                 // Begin gesture transition with immediate effect
                 videoManager.beginTransition(.gesture(from: current, to: current + 1)) {
                     Task { @MainActor in
+                        // Set initial state for animation
                         transitionState = .transitioning(from: current, to: current + 1)
-                        transitionOpacity = 1
-                        incomingOffset = UIScreen.main.bounds.height
+                        transitionOpacity = 0  // Start with new video invisible
+                        incomingOffset = UIScreen.main.bounds.height  // Position below
                     }
                 }
                 
@@ -308,28 +318,35 @@ struct VideoPlaybackView: View {
                     // Ensure next video is preloaded and ready
                     try await videoManager.preloadVideo(url: url, forIndex: current + 1)
                     
-                    // Start playing immediately
+                    // Prepare next video but don't start playing yet
                     if let player = videoManager.player(for: current + 1) {
                         await player.seek(to: .zero)
+                    }
+                    
+                    // Animate old video up while bringing new video in
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        offset = -UIScreen.main.bounds.height  // Move current video up
+                        incomingOffset = 0  // Bring new video to center
+                        transitionOpacity = 1  // Fade in new video
+                    }
+                    
+                    // Wait for animation to complete
+                    try await Task.sleep(nanoseconds: 300_000_000)
+                    
+                    // Start playing new video only after animation
+                    if let player = videoManager.player(for: current + 1) {
                         player.playImmediately(atRate: 1.0)
                         videoManager.startPlaying(at: current + 1)
                     }
                     
-                    // Quick animation
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        incomingOffset = 0
-                        transitionOpacity = 0
-                    }
-                    
-                    try await Task.sleep(nanoseconds: 200_000_000)
-                    
+                    // Capture videoManager before MainActor.run
+                    let manager = videoManager
                     await MainActor.run {
                         currentIndex = current + 1
                         transitionState = .none
-                        transitionOpacity = 1
+                        offset = 0  // Reset offset for next interaction
+                        manager.finishTransition(at: current + 1)
                     }
-                    
-                    videoManager.endTransition()
                     
                     // Preload next 12 videos in background
                     Task {

@@ -20,16 +20,10 @@ class VideoViewModel: ObservableObject {
     private let minBufferSize = 8 // Increased from 4 to handle multi-remove
     private let maxBufferSize = 16 // Increased from 8 to handle multi-remove
     
-    /// Represents the state of a video transition
-    enum VideoTransitionState {
-        case none
-        case removing(String)  // videoId
-        case replacing(String, Video)  // old videoId, new video
-        case completed
-    }
-
-    @Published private(set) var transitionState: VideoTransitionState = .none
-    @Published private(set) var loadingStates: Set<Int> = []
+    // Add state tracking
+    private var preservedState: [String: Any] = [:]
+    private var cachedThumbnails: [String: URL] = [:]
+    private var lastKnownIndices: [String: Int] = [:]
     
     func isLoadingVideo(_ videoId: String) -> Bool {
         return loadingVideoIds.contains(videoId)
@@ -71,43 +65,93 @@ class VideoViewModel: ObservableObject {
         isLoading = false
     }
     
+    func preserveCurrentState() {
+        self.preservedState["videos"] = self.videos
+        self.preservedState["videoSequence"] = self.videoSequence
+        self.preservedState["lastKnownIndices"] = self.lastKnownIndices
+        logger.info("📦 STATE: Preserved current grid state with \(self.videos.count) videos")
+    }
+    
+    func restorePreservedState() {
+        if let preservedVideos = self.preservedState["videos"] as? [Video] {
+            self.videos = preservedVideos
+            if let sequence = self.preservedState["videoSequence"] as? [Int: Video] {
+                self.videoSequence = sequence
+            }
+            if let indices = self.preservedState["lastKnownIndices"] as? [String: Int] {
+                self.lastKnownIndices = indices
+            }
+            logger.info("📦 STATE: Restored grid state with \(self.videos.count) videos")
+        }
+    }
+    
     func loadMoreVideosIfNeeded(currentIndex: Int) async {
         guard currentIndex >= videos.count - 3 && !isLoadingMore else { return }
         
-        logger.debug("📥 Loading more videos after index \(currentIndex)")
         isLoadingMore = true
-        error = nil
-        
         do {
-            // First check buffer
-            if !videoBuffer.isEmpty {
-                let neededCount = min(pageSize - videos.count, videoBuffer.count)
-                let bufferedVideos = Array(videoBuffer.prefix(neededCount))
-                videoBuffer.removeFirst(neededCount)
+            let existingCount = videos.count
+            let neededCount = max(0, pageSize - existingCount)
+            
+            if neededCount > 0 {
+                var newVideos = videos // Preserve existing videos
                 
-                var updatedVideos = videos
-                for video in bufferedVideos {
-                    updatedVideos.append(video)
-                    videoSequence[updatedVideos.count - 1] = video
+                // First check buffer
+                while newVideos.count < pageSize && !videoBuffer.isEmpty {
+                    newVideos.append(videoBuffer.removeFirst())
                 }
-                videos = updatedVideos
+                
+                // If still need more, fetch from network
+                let remainingNeeded = pageSize - newVideos.count
+                if remainingNeeded > 0 {
+                    for _ in 0..<remainingNeeded {
+                        let video = try await firestoreService.fetchRandomVideo()
+                        newVideos.append(video)
+                        // Cache the video's position
+                        lastKnownIndices[video.id] = newVideos.count - 1
+                    }
+                }
+                
+                await MainActor.run {
+                    videos = newVideos
+                    // Preserve sequence
+                    for (index, video) in newVideos.enumerated() {
+                        videoSequence[index] = video
+                    }
+                }
             }
             
-            // Replenish buffer if needed
-            if videoBuffer.count < minBufferSize {
-                let bufferNeeded = maxBufferSize - videoBuffer.count
-                for _ in 0..<bufferNeeded {
-                    let newVideo = try await firestoreService.fetchRandomVideo()
-                    videoBuffer.append(newVideo)
-                }
-                logger.debug("✅ Replenished buffer with \(bufferNeeded) videos")
+            // Replenish buffer in background
+            Task {
+                await replenishBuffer()
             }
         } catch {
-            logger.error("❌ Error loading more videos: \(error.localizedDescription)")
             self.error = error
+            logger.error("❌ Failed to load more videos: \(error.localizedDescription)")
         }
-        
         isLoadingMore = false
+    }
+    
+    private func replenishBuffer() async {
+        guard self.videoBuffer.count < self.minBufferSize else { return }
+        
+        do {
+            let needed = self.maxBufferSize - self.videoBuffer.count
+            for _ in 0..<needed {
+                let video = try await self.firestoreService.fetchRandomVideo()
+                self.videoBuffer.append(video)
+            }
+            logger.info("🔄 BUFFER: Replenished video buffer to \(self.videoBuffer.count) videos")
+        } catch {
+            logger.error("❌ BUFFER: Failed to replenish video buffer: \(error.localizedDescription)")
+        }
+    }
+    
+    func getVideoAtIndex(_ index: Int) -> Video? {
+        if index < videos.count {
+            return videos[index]
+        }
+        return videoSequence[index]
     }
     
     func getPreviousVideo(from index: Int) -> Video? {
@@ -139,93 +183,47 @@ class VideoViewModel: ObservableObject {
     }
     
     // Add video removal functionality
-    func removeVideo(_ videoId: String) async throws {
-        guard let index = videos.firstIndex(where: { $0.id == videoId }) else {
-            logger.error("❌ REMOVAL: Failed to find video with ID \(videoId)")
-            return
-        }
-        
-        // 1. Set removing state
-        await MainActor.run {
-            transitionState = .removing(videoId)
-            loadingStates.insert(index)
-        }
-        
-        do {
-            // 2. Fetch replacement video (with retry)
-            let newVideo = try await withRetry(maxAttempts: 3) {
-                if let buffered = videoBuffer.first {
+    func removeVideo(_ videoId: String) async {
+        if let index = videos.firstIndex(where: { $0.id == videoId }) {
+            do {
+                replacingVideoId = videoId
+                
+                // Try to get replacement from buffer first
+                var newVideo: Video
+                if let bufferedVideo = videoBuffer.first {
+                    newVideo = bufferedVideo
                     videoBuffer.removeFirst()
-                    return buffered
+                } else {
+                    // Fetch new video if buffer is empty
+                    newVideo = try await firestoreService.fetchRandomVideo()
                 }
-                return try await firestoreService.fetchRandomVideo()
-            }
-            
-            // 3. Update transition state with new video
-            await MainActor.run {
-                transitionState = .replacing(videoId, newVideo)
-            }
-            
-            // 4. Perform atomic update
-            await MainActor.run {
+                
+                // Atomic update
                 var updatedVideos = videos
                 updatedVideos.remove(at: index)
                 updatedVideos.insert(newVideo, at: index)
-                videos = updatedVideos
+                
+                // Update sequence
                 videoSequence[index] = newVideo
                 
-                // 5. Clear states
-                transitionState = .completed
-                loadingStates.remove(index)
-            }
-            
-            // 6. Replenish buffer asynchronously
-            Task {
-                await replenishBuffer()
-            }
-            
-            logger.debug("✅ REMOVAL: Successfully replaced video \(videoId) with \(newVideo.id)")
-        } catch {
-            // Reset states on error
-            await MainActor.run {
-                transitionState = .none
-                loadingStates.remove(index)
-            }
-            logger.error("❌ REMOVAL: Failed to replace video \(videoId): \(error.localizedDescription)")
-            throw error
-        }
-    }
-    
-    private func withRetry<T>(maxAttempts: Int, operation: () async throws -> T) async throws -> T {
-        var attempts = 0
-        var lastError: Error?
-        
-        while attempts < maxAttempts {
-            do {
-                return try await operation()
-            } catch {
-                attempts += 1
-                lastError = error
-                if attempts < maxAttempts {
-                    try await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempts)) * 1_000_000_000))
+                videos = updatedVideos
+                replacingVideoId = nil
+                
+                // Replenish buffer asynchronously
+                Task {
+                    if videoBuffer.count < minBufferSize {
+                        do {
+                            let newBufferVideo = try await self.firestoreService.fetchRandomVideo()
+                            videoBuffer.append(newBufferVideo)
+                        } catch {
+                            logger.error("❌ Error replenishing buffer: \(error.localizedDescription)")
+                        }
+                    }
                 }
+            } catch {
+                self.error = error
+                replacingVideoId = nil
             }
-        }
-        
-        throw lastError ?? NSError(domain: "com.Gauntlet.LikeThese", code: -1, 
-            userInfo: [NSLocalizedDescriptionKey: "Max retry attempts reached"])
-    }
-    
-    private func replenishBuffer() async {
-        guard videoBuffer.count < 4 else { return }
-        
-        do {
-            let newVideo = try await firestoreService.fetchRandomVideo()
-            await MainActor.run {
-                videoBuffer.append(newVideo)
-            }
-        } catch {
-            logger.error("❌ BUFFER: Failed to replenish video buffer: \(error.localizedDescription)")
         }
     }
     

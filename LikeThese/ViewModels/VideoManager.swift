@@ -119,7 +119,6 @@ class VideoManager: NSObject, ObservableObject {
     // Existing properties
     private var players: [Int: AVPlayer] = [:]
     private var preloadedPlayers: [Int: AVPlayer] = [:]
-    private var observers: [Int: NSKeyValueObservation] = [:]
     private var timeObservers: [Int: (observer: Any, player: AVPlayer)] = [:]
     private var endTimeObservers: [Int: (observer: Any, player: AVPlayer)] = [:]
     private var playerItems: [Int: AVPlayerItem] = [:]
@@ -154,6 +153,19 @@ class VideoManager: NSObject, ObservableObject {
     
     private var keepRange: KeepRange?
     private var pendingCleanup = Set<Int>()
+    
+    // Add state preservation
+    private var preservedPlayers: [Int: AVPlayer] = [:]
+    private var preservedStates: [Int: String] = [:]
+    private var preservedItems: [Int: AVPlayerItem] = [:]
+    
+    private enum ObserverKey: Hashable {
+        case buffer(index: Int)
+        case status(index: Int)
+    }
+    
+    // Update observers dictionary type
+    private var observers: [ObserverKey: NSKeyValueObservation] = [:]
     
     // Private initializer for singleton
     private override init() {
@@ -241,7 +253,7 @@ class VideoManager: NSObject, ObservableObject {
                     self.playerUrls[index] = url
                     
                     // Setup observers
-                    self.setupBuffering(for: player, at: index)
+                    self.setupPlayerObservers(for: player, at: index)
                     self.setupEndTimeObserver(for: player, at: index)
                     
                     // Update states
@@ -357,85 +369,75 @@ class VideoManager: NSObject, ObservableObject {
         }
     }
     
-    private func setupBuffering(for player: AVPlayer, at index: Int) {
-        // Remove any existing observers for this index first
-        cleanupObservers(for: index)
-        
-        // Set preferred buffer duration
-        player.automaticallyWaitsToMinimizeStalling = true
-        
-        // Add periodic time observer for tracking playback progress
-        let interval = CMTime(seconds: 1.0, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        let timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            guard let self,
-                  let currentItem = player.currentItem else { return }
-            
-            let currentTime = CMTimeGetSeconds(time)
-            let duration = CMTimeGetSeconds(currentItem.duration)
-            
-            // Log progress every 10 seconds or when significant events occur
-            if Int(currentTime) % 10 == 0 || currentTime == duration {
-                logger.info("📊 PLAYBACK PROGRESS: Video \(index) at \(String(format: "%.1f", currentTime))s/\(String(format: "%.1f", duration))s (\(String(format: "%.1f%%", currentTime/duration * 100))% complete)")
-            }
-            
-            // Check buffering state
-            let loadedRanges = currentItem.loadedTimeRanges
-            guard let firstRange = loadedRanges.first as? CMTimeRange else { return }
-            
-            let bufferedDuration = CMTimeGetSeconds(firstRange.duration)
-            if bufferedDuration.isFinite {
-                let progress = Float(bufferedDuration / self.preferredBufferDuration)
-                Task { @MainActor in
-                    self.bufferingProgress[index] = min(progress, 1.0)
-                    logger.info("📊 BUFFER PROGRESS: Video \(index) buffered \(String(format: "%.1f", bufferedDuration))s (\(String(format: "%.0f", progress * 100))%)")
-                }
-            }
+    private func setupPlayerObservers(for player: AVPlayer, at index: Int) {
+        // Setup time observer
+        let timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC)),
+            queue: .main
+        ) { [weak self] time in
+            guard let self = self else { return }
+            self.handleTimeUpdate(time: time, for: player, at: index)
         }
         timeObservers[index] = (observer: timeObserver, player: player)
         
-        // Observe buffering state
-        let bufferingObserver = player.observe(\.currentItem?.status) { [weak self] player, _ in
+        // Setup buffering observer
+        let bufferingObserver = player.currentItem?.observe(\.isPlaybackLikelyToKeepUp) { [weak self] currentItem, _ in
             guard let self = self else { return }
-            if let currentItem = player.currentItem {
-                let isBuffering = currentItem.status != .readyToPlay
-                Task { @MainActor in
-                    self.bufferingStates[index] = isBuffering
-                    
-                    if currentItem.status == .failed {
-                        logger.error("❌ PLAYBACK ERROR: Video \(index) failed to load: \(String(describing: currentItem.error))")
-                        await self.retryLoadingIfNeeded(for: index)
-                    } else {
-                        logger.info("🎮 BUFFER STATE: Video \(index) buffering: \(isBuffering)")
-                    }
+            Task { @MainActor in
+                let isBuffering = !(currentItem.isPlaybackLikelyToKeepUp)
+                if currentItem.status == .failed {
+                    logger.error("❌ PLAYBACK ERROR: Video \(index) failed to load: \(String(describing: currentItem.error))")
+                    await self.retryLoadingIfNeeded(for: index)
+                } else {
+                    logger.info("🎮 BUFFER STATE: Video \(index) buffering: \(isBuffering)")
                 }
             }
         }
-        observers[index] = bufferingObserver
+        observers[.buffer(index: index)] = bufferingObserver
+        
+        // Setup status observer
+        let statusObserver = player.currentItem?.observe(\.status) { [weak self] item, _ in
+            guard let self = self else { return }
+            Task { @MainActor in
+                switch item.status {
+                case .readyToPlay:
+                    logger.info("✅ PLAYER: Video \(index) ready to play")
+                    self.preloadStates[index] = .ready
+                case .failed:
+                    logger.error("❌ PLAYER ERROR: Video \(index) failed: \(String(describing: item.error))")
+                    self.preloadStates[index] = .failed(item.error ?? NSError())
+                case .unknown:
+                    logger.info("⏳ PLAYER: Video \(index) in unknown state")
+                @unknown default:
+                    break
+                }
+            }
+        }
+        
+        // Store status observer
+        if let statusObserver = statusObserver {
+            observers[.status(index: index)] = statusObserver
+        }
+        
+        logger.info("👀 OBSERVERS: Set up observers for video at index \(index)")
     }
     
-    private func retryLoadingIfNeeded(for index: Int) async {
-        guard let player = players[index],
-              let currentItem = player.currentItem,
-              currentItem.status == .failed else {
-            return
+    private func removePlayerObservers(for player: AVPlayer, at index: Int) {
+        // Remove time observer
+        if let (observer, observerPlayer) = timeObservers[index] {
+            observerPlayer.removeTimeObserver(observer)
+            timeObservers[index] = nil
         }
         
-        logger.info("🔄 SYSTEM: Attempting to retry loading video \(index)")
+        // Remove buffering observer
+        observers[.buffer(index: index)]?.invalidate()
+        observers[.buffer(index: index)] = nil
         
-        // Wait a bit before retrying
-        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+        // Remove status observer
+        observers[.status(index: index)]?.invalidate()
+        observers[.status(index: index)] = nil
         
-        if let asset = currentItem.asset as? AVURLAsset {
-            do {
-                let newPlayerItem = try await videoCacheService.preloadVideo(url: asset.url)
-                await MainActor.run {
-                    player.replaceCurrentItem(with: newPlayerItem)
-                    logger.info("✅ SYSTEM: Successfully reloaded video \(index)")
-                }
-            } catch {
-                logger.error("❌ SYSTEM ERROR: Failed to reload video \(index): \(error.localizedDescription)")
-            }
-        }
+        logger.info("👀 OBSERVERS: Removed observers for video at index \(index)")
     }
     
     private func setupEndTimeObserver(for player: AVPlayer, at index: Int) {
@@ -549,7 +551,19 @@ class VideoManager: NSObject, ObservableObject {
     
     func prepareForPlayback(at index: Int) {
         logger.info("🎮 TRANSITION: Preparing for video playback at index \(index)")
-        currentState = .loading(index: index)
+        
+        // First try to restore preserved state
+        if preservedPlayers[index] != nil {
+            restorePlayerState(for: index)
+            return
+        }
+        
+        // If no preserved state, create new player
+        let player = AVPlayer()
+        player.automaticallyWaitsToMinimizeStalling = false
+        players[index] = player
+        setupPlayerObservers(for: player, at: index)
+        logger.info("🎮 PLAYER: Created new player for index \(index)")
     }
     
     func startPlaying(at index: Int) {
@@ -621,35 +635,26 @@ class VideoManager: NSObject, ObservableObject {
         
         switch context {
         case .navigation(let from, let to):
-            // Keep a wider range of videos around the transition
-            let keepRange = KeepRange(
-                start: min(from, to) - preloadWindowSize,
-                end: max(from, to) + preloadWindowSize
-            )
-            self.keepRange = keepRange
-            
-            logger.info("🎯 CLEANUP RANGE: From index: \(from), To index: \(to), Keep range: \(keepRange.start) to \(keepRange.end)")
-            
-            // Only cleanup videos very far outside the keep range
-            let candidates = getCleanupCandidates(currentIndex: to)
-            for index in candidates {
-                performCleanup(for: index)
+            // During navigation, preserve state of source and destination
+            preservePlayerState(for: from)
+            if let player = players[to] {
+                preservePlayerState(for: to)
             }
+            
+            // Cleanup other resources outside the navigation range
+            let keepRange = KeepRange(start: min(from, to) - 1, end: max(from, to) + 1)
+            cleanupResourcesOutside(keepRange)
             
         case .dismissal:
-            // On dismissal, cleanup everything
-            for index in players.keys {
-                performCleanup(for: index)
+            // On dismissal, preserve current state before cleanup
+            if let current = activeVideoIndex {
+                preservePlayerState(for: current)
             }
-            currentState = .idle
-            activeVideoIndex = nil
+            cleanupAllResources()
             
         case .error:
-            // On error, cleanup everything except the current player if it exists
-            let currentIndex = currentState.currentIndex
-            for index in players.keys where index != currentIndex {
-                performCleanup(for: index)
-            }
+            // On error, just clean everything
+            cleanupAllResources()
         }
         
         // Reset transition state
@@ -688,9 +693,9 @@ class VideoManager: NSObject, ObservableObject {
         }
         
         // Remove KVO observer if it exists
-        if let observer = observers[index] {
+        if let observer = observers[.buffer(index: index)] {
             observer.invalidate()
-            observers[index] = nil
+            observers[.buffer(index: index)] = nil
             logger.info("🧹 CLEANUP: Removed KVO observer for index \(index)")
         }
         
@@ -865,52 +870,86 @@ class VideoManager: NSObject, ObservableObject {
         logger.info("✅ TRANSITION: Successfully finished transition to \(index)")
     }
     
-    private func setupObservers(for index: Int, player: AVPlayer) {
-        // Setup time observer
-        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        let timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            let seconds = CMTimeGetSeconds(time)
-            logger.info("⏱️ TIME: Video \(index) at \(seconds) seconds")
-        }
-        self.timeObservers[index] = (observer: timeObserver, player: player)
-        
-        // Setup end time observer
-        let endTime = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        let endObserver = player.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) {
-            logger.info("🎬 END: Video \(index) reached end")
-            Task { @MainActor in
-                self.onVideoComplete?(index)
-            }
-        }
-        self.endTimeObservers[index] = (observer: endObserver, player: player)
-        
-        // Setup KVO observer for status changes
-        let observer = player.observe(\.timeControlStatus) { [weak self] player, _ in
-            guard let self else { return }
-            Task { @MainActor in
-                switch player.timeControlStatus {
-                case .playing:
-                    logger.info("▶️ STATUS: Video \(index) is playing")
-                case .paused:
-                    logger.info("⏸️ STATUS: Video \(index) is paused")
-                case .waitingToPlayAtSpecifiedRate:
-                    logger.info("⏳ STATUS: Video \(index) is buffering")
-                @unknown default:
-                    logger.info("❓ STATUS: Video \(index) in unknown state")
-                }
-            }
-        }
-        self.observers[index] = observer
-        
-        logger.info("👀 OBSERVERS: Set up all observers for video \(index)")
+    private func handleTimeUpdate(time: CMTime, for player: AVPlayer, at index: Int) {
+        let seconds = CMTimeGetSeconds(time)
+        logger.info("⏱️ TIME: Video \(index) at \(seconds) seconds")
     }
     
-    // Add method to get active players
-    func getActivePlayers() -> [Int] {
-        Array(players.keys)
+    private func cleanupResourcesOutside(_ keepRange: KeepRange) {
+        for (index, player) in players {
+            if !keepRange.contains(index) {
+                cleanupPlayer(at: index)
+            }
+        }
+        logger.info("🧹 CLEANUP: Cleaned up resources outside range \(keepRange.start)-\(keepRange.end)")
+    }
+    
+    private func cleanupPlayer(at index: Int) {
+        if let player = players[index] {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            removePlayerObservers(for: player, at: index)
+            players[index] = nil
+            playerItems[index] = nil
+            playerStates[index] = nil
+            logger.info("🧹 CLEANUP: Cleaned up player at index \(index)")
+        }
+    }
+    
+    private func cleanupAllResources() {
+        for (index, _) in players {
+            cleanupPlayer(at: index)
+        }
+        players.removeAll()
+        playerItems.removeAll()
+        playerStates.removeAll()
+        logger.info("🧹 CLEANUP: Cleaned up all resources")
     }
 
-    // Add transition management methods
+    func preservePlayerState(for index: Int) {
+        guard let player = players[index] else { return }
+        preservedPlayers[index] = player
+        preservedStates[index] = playerStates[index]
+        preservedItems[index] = player.currentItem
+        logger.info("🎮 PLAYER: Preserved state for video at index \(index)")
+    }
+    
+    func restorePlayerState(for index: Int) {
+        if let player = preservedPlayers[index] {
+            players[index] = player
+            playerStates[index] = preservedStates[index]
+            if let item = preservedItems[index] {
+                player.replaceCurrentItem(with: item)
+            }
+            logger.info("🎮 PLAYER: Restored state for video at index \(index)")
+        }
+    }
+
+    private func retryLoadingIfNeeded(for index: Int) async {
+        guard let player = players[index],
+              let currentItem = player.currentItem,
+              currentItem.status == .failed else {
+            return
+        }
+        
+        logger.info("🔄 SYSTEM: Attempting to retry loading video \(index)")
+        
+        // Wait a bit before retrying
+        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+        
+        if let asset = currentItem.asset as? AVURLAsset {
+            do {
+                let newPlayerItem = try await videoCacheService.preloadVideo(url: asset.url)
+                await MainActor.run {
+                    player.replaceCurrentItem(with: newPlayerItem)
+                    logger.info("✅ SYSTEM: Successfully reloaded video \(index)")
+                }
+            } catch {
+                logger.error("❌ SYSTEM ERROR: Failed to reload video \(index): \(error.localizedDescription)")
+            }
+        }
+    }
+
     func beginTransition(_ newTransition: TransitionState, completion: @escaping () -> Void) {
         // Cancel any pending transitions
         transitionQueue.removeAll()
@@ -925,47 +964,5 @@ class VideoManager: NSObject, ObservableObject {
         // Start the new transition immediately
         transitionState = newTransition
         completion()
-    }
-    
-    func endTransition() {
-        self.transitionState = .none
-        
-        // Process next queued transition if any
-        if let (nextState, nextAction) = self.transitionQueue.first {
-            self.transitionQueue.removeFirst()
-            self.beginTransition(nextState) {
-                nextAction()
-            }
-        }
-    }
-
-    private func processNextTransition() {
-        guard !transitionQueue.isEmpty else {
-            isProcessingTransition = false
-            return
-        }
-        
-        let (nextTransition, completion) = transitionQueue.removeFirst()
-        transitionState = nextTransition
-        completion()
-    }
-
-    func handleTransition(from: Int, to: Int) {
-        beginTransition(.gesture(from: from, to: to), completion: {
-            // Transition logic
-        })
-    }
-
-    private func getCleanupCandidates(currentIndex: Int) -> [Int] {
-        // Only cleanup videos that are very far outside the preload window
-        // Keep more videos in memory to allow for smoother navigation
-        let keepRange = preloadWindowSize * 2 // Double the window size for cleanup
-        return players.keys.filter { index in
-            let distance = abs(index - currentIndex)
-            // Only clean up if:
-            // 1. Very far from current index
-            // 2. Not immediately adjacent to current preload window
-            return distance > keepRange && abs(distance - preloadWindowSize) > 2
-        }
     }
 } 

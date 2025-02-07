@@ -9,6 +9,8 @@ struct VideoPlayerView: View {
     let index: Int
     @ObservedObject var videoManager: VideoManager
     @State private var isLoading = true
+    @State private var retryCount = 0
+    private let maxRetries = 3
     private let videoCacheService = VideoCacheService.shared
     
     var body: some View {
@@ -20,32 +22,7 @@ struct VideoPlayerView: View {
                 .onAppear {
                     logger.debug("📱 VIDEO PLAYER: View appeared for index \(index)")
                     Task {
-                        do {
-                            let playerItem = try await videoCacheService.preloadVideo(url: url)
-                            await MainActor.run {
-                                if let player = videoManager.player(for: index) as AVPlayer? {
-                                    if let currentItem = player.currentItem {
-                                        if currentItem.status == .failed {
-                                            player.replaceCurrentItem(with: playerItem)
-                                            player.play()
-                                            logger.debug("✅ VIDEO PLAYER: Recovered failed playback for index \(index)")
-                                        } else {
-                                            logger.debug("ℹ️ VIDEO PLAYER: Player already has working item for index \(index)")
-                                        }
-                                    } else {
-                                        player.replaceCurrentItem(with: playerItem)
-                                        player.play()
-                                        logger.debug("✅ VIDEO PLAYER: Started new playback for index \(index)")
-                                    }
-                                } else {
-                                    logger.error("❌ VIDEO PLAYER: No player available for index \(index)")
-                                }
-                                isLoading = false
-                            }
-                        } catch {
-                            logger.error("❌ VIDEO PLAYER: Error loading video \(index): \(error.localizedDescription)")
-                            isLoading = false
-                        }
+                        await loadVideo()
                     }
                 }
             
@@ -64,6 +41,32 @@ struct VideoPlayerView: View {
                 }
             }
         }
+    }
+    
+    private func loadVideo() async {
+        repeat {
+            do {
+                let playerItem = try await videoCacheService.preloadVideo(url: url)
+                await MainActor.run {
+                    if let player = videoManager.player(for: index) as AVPlayer? {
+                        if let currentItem = player.currentItem, currentItem.status == .failed {
+                            player.replaceCurrentItem(with: playerItem)
+                        }
+                        isLoading = false
+                        retryCount = 0 // Reset on success
+                    }
+                }
+                break // Success - exit loop
+            } catch {
+                logger.error("❌ VIDEO PLAYER: Failed to load video at index \(index): \(error.localizedDescription)")
+                retryCount += 1
+                if retryCount >= maxRetries {
+                    logger.error("❌ VIDEO PLAYER: Max retries reached for video at index \(index)")
+                    break
+                }
+                try? await Task.sleep(nanoseconds: UInt64(1_000_000_000)) // Wait 1 second before retry
+            }
+        } while retryCount < maxRetries
     }
 }
 

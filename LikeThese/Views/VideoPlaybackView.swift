@@ -184,14 +184,15 @@ struct VideoPlaybackView: View {
     }
     
     private func handleDragGesture(_ value: DragGesture.Value, geometry: GeometryProxy) {
-        let dragThreshold = geometry.size.height * 0.3
+        let dragThreshold = geometry.size.height * 0.2
         let horizontalThreshold = geometry.size.width * 0.3
         let velocityX = value.predictedEndLocation.x - value.location.x
         let velocityY = value.predictedEndLocation.y - value.location.y
+        let velocityThreshold: CGFloat = 500
         
         // Reset offsets if gesture doesn't meet threshold
         let resetOffsets = {
-            withAnimation(.spring()) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                 horizontalOffset = 0
                 offset = 0
                 isGestureActive = false
@@ -301,7 +302,7 @@ struct VideoPlaybackView: View {
                     }
                 }
                 
-                // Try to get next video
+                // Try to get next video and preload upcoming videos
                 if let nextVideo = viewModel.getNextVideo(from: current),
                    let url = URL(string: nextVideo.url) {
                     // Ensure next video is preloaded and ready
@@ -330,10 +331,19 @@ struct VideoPlaybackView: View {
                     
                     videoManager.endTransition()
                     
-                    // Preload next video in background
-                    if let nextNextVideo = viewModel.getNextVideo(from: current + 1),
-                       let nextUrl = URL(string: nextNextVideo.url) {
-                        try await videoManager.preloadVideo(url: nextUrl, forIndex: current + 2)
+                    // Preload next 12 videos in background
+                    Task {
+                        // Preload in batches of 3 to avoid overwhelming the system
+                        for batchStart in stride(from: 2, to: 13, by: 3) {
+                            for offset in batchStart...(min(batchStart + 2, 12)) {
+                                if let futureVideo = viewModel.getNextVideo(from: current + offset - 1),
+                                   let futureUrl = URL(string: futureVideo.url) {
+                                    try? await videoManager.preloadVideo(url: futureUrl, forIndex: current + offset)
+                                }
+                            }
+                            // Small delay between batches
+                            try? await Task.sleep(nanoseconds: 100_000_000)
+                        }
                     }
                 }
             } catch {
@@ -351,45 +361,13 @@ struct VideoPlaybackView: View {
             logger.info("🎬 VIDEO COMPLETION HANDLER: Auto-advance triggered for completed video at index \(index)")
             logger.info("📊 QUEUE POSITION: Video \(index + 1) of \(viewModel.videos.count) in queue")
             
-            guard !isGestureActive else {
-                logger.info("⚠️ AUTO-ADVANCE CANCELLED: Active gesture detected during video completion at index \(index)")
+            // Only cancel auto-advance if there's an active drag gesture
+            guard isGestureActive && dragState else {
+                logger.info("✅ AUTO-ADVANCE: Proceeding with auto-advance for video \(index)")
                 return
             }
             
-            Task { @MainActor in
-                if let current = currentIndex, current == index {
-                    let nextIndex = index + 1
-                    if nextIndex < viewModel.videos.count {
-                        // Set transition state and position incoming video
-                        transitionState = .transitioning(from: index, to: nextIndex)
-                        transitionOpacity = 1
-                        incomingOffset = UIScreen.main.bounds.height
-                        
-                        // Prepare for transition
-                        videoManager.prepareForTransition(from: index, to: nextIndex)
-                        
-                        // Animate the incoming video into position
-                        withAnimation(.easeInOut(duration: 0.35)) {
-                            incomingOffset = 0
-                            transitionOpacity = 0
-                            logger.info("🔄 AUTO-ADVANCE ANIMATION: Started transition animation")
-                        }
-                        
-                        // Wait for animation
-                        try? await Task.sleep(nanoseconds: 350_000_000)
-                        
-                        // Complete transition
-                        if currentIndex == index {
-                            currentIndex = nextIndex
-                            transitionState = .none
-                            transitionOpacity = 1
-                            
-                            logger.info("✅ AUTO-ADVANCE: Completed transition to video \(nextIndex)")
-                            videoManager.finishTransition(at: nextIndex)
-                        }
-                    }
-                }
-            }
+            logger.info("⚠️ AUTO-ADVANCE CANCELLED: Active gesture detected during video completion at index \(index)")
         }
     }
 }

@@ -142,11 +142,11 @@ class VideoManager: NSObject, ObservableObject {
     @Published private(set) var preloadStates: [Int: PreloadState] = [:]
     
     // Configuration
-    private let preferredBufferDuration: TimeInterval = 10.0
-    private let verificationTimeout: TimeInterval = 10.0
-    private let minimumBufferDuration: TimeInterval = 3.0
-    private let preloadWindowSize = 4 // Increased from 2
-    private let preloadTriggerThreshold = 2 // Number of videos remaining before triggering more preloads
+    private let preferredBufferDuration: TimeInterval = 30.0
+    private let verificationTimeout: TimeInterval = 15.0
+    private let minimumBufferDuration: TimeInterval = 5.0
+    private let preloadWindowSize = 12
+    private let preloadTriggerThreshold = 6
     
     var onVideoComplete: ((Int) -> Void)?
     
@@ -621,12 +621,18 @@ class VideoManager: NSObject, ObservableObject {
         
         switch context {
         case .navigation(let from, let to):
-            // During navigation, only cleanup players outside the keep range
+            // Keep a wider range of videos around the transition
             let keepRange = KeepRange(
-                start: min(from, to) - 1,
-                end: max(from, to) + 1
+                start: min(from, to) - preloadWindowSize,
+                end: max(from, to) + preloadWindowSize
             )
-            for index in players.keys where !keepRange.contains(index) {
+            self.keepRange = keepRange
+            
+            logger.info("🎯 CLEANUP RANGE: From index: \(from), To index: \(to), Keep range: \(keepRange.start) to \(keepRange.end)")
+            
+            // Only cleanup videos very far outside the keep range
+            let candidates = getCleanupCandidates(currentIndex: to)
+            for index in candidates {
                 performCleanup(for: index)
             }
             
@@ -805,42 +811,53 @@ class VideoManager: NSObject, ObservableObject {
         Task { @MainActor in
             // Keep a larger window of videos around the current index
             let keepRange = KeepRange(
-                start: index - preloadWindowSize,
+                start: max(0, index - preloadWindowSize),
                 end: index + preloadWindowSize
             )
             
-            // Cleanup videos far outside the keep range
-            for videoIndex in players.keys where videoIndex < keepRange.start - preloadWindowSize || videoIndex > keepRange.end + preloadWindowSize {
+            // Only cleanup videos well outside the keep range
+            let cleanupThreshold = preloadWindowSize * 2
+            for videoIndex in players.keys where videoIndex < keepRange.start - cleanupThreshold || videoIndex > keepRange.end + cleanupThreshold {
                 performCleanup(for: videoIndex)
             }
             
-            // Check if we need to preload more videos
+            // Check if we need to preload more videos forward
             let remainingForward = keepRange.end - index
             if remainingForward <= preloadTriggerThreshold {
-                // Trigger preload of next batch of videos
-                for i in (keepRange.end + 1)...(keepRange.end + preloadWindowSize) {
-                    if let url = playerUrls[i] {
-                        do {
-                            try await preloadVideo(url: url, forIndex: i)
-                        } catch {
-                            logger.error("❌ PRELOAD ERROR: Failed to preload video at index \(i): \(error.localizedDescription)")
+                // Trigger preload of next batch of videos in groups of 3
+                for batchStart in stride(from: keepRange.end + 1, to: keepRange.end + preloadWindowSize + 1, by: 3) {
+                    let batchEnd = min(batchStart + 2, keepRange.end + preloadWindowSize)
+                    for i in batchStart...batchEnd {
+                        if let url = playerUrls[i] {
+                            do {
+                                try await preloadVideo(url: url, forIndex: i)
+                            } catch {
+                                logger.error("❌ PRELOAD ERROR: Failed to preload video at index \(i): \(error.localizedDescription)")
+                            }
                         }
                     }
+                    // Small delay between batches
+                    try? await Task.sleep(nanoseconds: 100_000_000)
                 }
             }
             
-            // Also check backward preloading
+            // Check if we need to preload more videos backward
             let remainingBackward = index - keepRange.start
             if remainingBackward <= preloadTriggerThreshold {
-                // Trigger preload of previous batch of videos
-                for i in (keepRange.start - preloadWindowSize)...(keepRange.start - 1) where i >= 0 {
-                    if let url = playerUrls[i] {
-                        do {
-                            try await preloadVideo(url: url, forIndex: i)
-                        } catch {
-                            logger.error("❌ PRELOAD ERROR: Failed to preload video at index \(i): \(error.localizedDescription)")
+                // Trigger preload of previous batch of videos in groups of 3
+                for batchStart in stride(from: keepRange.start - 1, through: max(0, keepRange.start - preloadWindowSize), by: -3) {
+                    let batchEnd = max(batchStart - 2, max(0, keepRange.start - preloadWindowSize))
+                    for i in (batchEnd...batchStart).reversed() where i >= 0 {
+                        if let url = playerUrls[i] {
+                            do {
+                                try await preloadVideo(url: url, forIndex: i)
+                            } catch {
+                                logger.error("❌ PRELOAD ERROR: Failed to preload video at index \(i): \(error.localizedDescription)")
+                            }
                         }
                     }
+                    // Small delay between batches
+                    try? await Task.sleep(nanoseconds: 100_000_000)
                 }
             }
         }
@@ -937,5 +954,18 @@ class VideoManager: NSObject, ObservableObject {
         beginTransition(.gesture(from: from, to: to), completion: {
             // Transition logic
         })
+    }
+
+    private func getCleanupCandidates(currentIndex: Int) -> [Int] {
+        // Only cleanup videos that are very far outside the preload window
+        // Keep more videos in memory to allow for smoother navigation
+        let keepRange = preloadWindowSize * 2 // Double the window size for cleanup
+        return players.keys.filter { index in
+            let distance = abs(index - currentIndex)
+            // Only clean up if:
+            // 1. Very far from current index
+            // 2. Not immediately adjacent to current preload window
+            return distance > keepRange && abs(distance - preloadWindowSize) > 2
+        }
     }
 } 

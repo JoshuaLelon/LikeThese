@@ -12,12 +12,15 @@ struct InspirationsGridView: View {
     @State private var gridVideos: [Video] = []
     @State private var showError = false
     @State private var errorMessage: String?
+    @State private var replacingVideoId: String?
     
     // Gesture state tracking
     @State private var isSwipeInProgress = false
     @State private var swipingVideoId: String?
     @State private var swipeOffset: CGFloat = 0
     @State private var removingVideoId: String?
+    
+    @State private var preloadingIndex: Int?
     
     @MainActor
     init(videoManager: VideoManager = VideoManager.shared) {
@@ -43,7 +46,13 @@ struct InspirationsGridView: View {
                         }
                     }
                 } else {
-                    gridContent
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 0) {
+                            ForEach(Array(gridVideos.enumerated()), id: \.element.id) { index, video in
+                                gridItem(video: video, index: index)
+                            }
+                        }
+                    }
                 }
             }
             .navigationDestination(isPresented: $isVideoPlaybackActive) {
@@ -62,6 +71,13 @@ struct InspirationsGridView: View {
                 }
             }
         }
+        .alert("Error", isPresented: $showError) {
+            Button("OK") {
+                showError = false
+            }
+        } message: {
+            Text(errorMessage ?? "An unknown error occurred")
+        }
         .task {
             await viewModel.loadInitialVideos()
             gridVideos = viewModel.videos
@@ -76,59 +92,65 @@ struct InspirationsGridView: View {
     }
     
     private var gridContent: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 0) {
-                ForEach(Array(gridVideos.enumerated()), id: \.element.id) { index, video in
-                    gridItem(video: video, index: index)
-                }
+        LazyVGrid(columns: columns, spacing: 0) {
+            ForEach(Array(gridVideos.enumerated()), id: \.element.id) { index, video in
+                gridItem(video: video, index: index)
             }
         }
+        .padding(.horizontal, 0)
+        .padding(.vertical, 0)
     }
     
     private func gridItem(video: Video, index: Int) -> some View {
-        let isRemoving = video.id == removingVideoId
+        let isReplacing = video.id == viewModel.replacingVideoId
+        let isLoading = isReplacing || viewModel.isLoadingVideo(video.id)
         let isBeingDragged = video.id == swipingVideoId
         
         return AsyncImage(url: video.thumbnailUrl.flatMap { URL(string: $0) }) { phase in
-            Group {
+            ZStack {
                 switch phase {
                 case .empty:
-                    ProgressView()
+                    LoadingView(message: "Loading thumbnail...")
                 case .success(let image):
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 case .failure:
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(.red)
+                    LoadingView(message: "Failed to load", isError: true)
                 @unknown default:
-                    EmptyView()
+                    LoadingView(message: "Loading...")
+                }
+                
+                if isLoading {
+                    Color.black.opacity(0.7)
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text(isReplacing ? "Replacing video..." : "Loading...")
+                            .foregroundColor(.white)
+                            .font(.caption)
+                    }
                 }
             }
             .frame(height: 300)
             .clipped()
-            .opacity(isRemoving ? 0 : 1)
+            .contentShape(Rectangle())
             .offset(y: isBeingDragged ? swipeOffset : 0)
-            .simultaneousGesture(
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: swipeOffset)
+            .gesture(
                 DragGesture()
                     .onChanged { value in
                         isSwipeInProgress = true
                         swipingVideoId = video.id
                         swipeOffset = value.translation.height
-                        logger.info("🔄 Swipe in progress - Video ID: \(video.id), Offset: \(swipeOffset)")
                     }
                     .onEnded { value in
                         let threshold: CGFloat = -90 // 30% of 300px height
                         if value.translation.height < threshold {
-                            logger.info("🗑️ Removing video with upward swipe - Video ID: \(video.id)")
-                            withAnimation(.spring()) {
-                                removingVideoId = video.id
-                            }
                             Task {
                                 await viewModel.removeVideo(video.id)
                             }
                         } else {
-                            logger.info("↩️ Cancelling swipe - Video ID: \(video.id)")
                             withAnimation(.spring()) {
                                 swipeOffset = 0
                             }
@@ -139,13 +161,14 @@ struct InspirationsGridView: View {
             )
             .onTapGesture {
                 if !isSwipeInProgress {
-                    logger.info("👆 Grid selection - Video ID: \(video.id), Index: \(index), Grid Position: \(index/2),\(index%2)")
                     Task {
-                        await preloadAndNavigate(to: index)
+                        await navigateToVideo(at: index)
                     }
                 }
             }
         }
+        .transition(.opacity)
+        .animation(.easeInOut, value: isLoading)
     }
     
     private func fallbackVideoImage(video: Video, width: CGFloat, height: CGFloat) -> some View {
@@ -187,43 +210,62 @@ struct InspirationsGridView: View {
         }
     }
     
-    func preloadAndNavigate(to index: Int) async {
+    private func navigateToVideo(at index: Int) async {
         guard let video = gridVideos[safe: index],
               let url = URL(string: video.url) else {
-            logger.error("❌ NAVIGATION: Invalid video URL for index \(index)")
-            await MainActor.run {
-                errorMessage = "Invalid video URL"
-                showError = true
-                videoManager.cleanup(context: .error)
-            }
+            errorMessage = "Invalid video URL"
+            showError = true
             return
         }
         
+        preloadingIndex = index
+        
         do {
-            // Prepare for transition before preloading
+            // Prepare for playback
             videoManager.prepareForPlayback(at: index)
             
-            // Preload video and wait for completion
+            // Preload with progress tracking
             try await videoManager.preloadVideo(url: url, forIndex: index)
             
-            // Only navigate if preload was successful and we haven't started another preload
-            await MainActor.run {
-                if videoManager.currentState.currentIndex == index {
-                    selectedVideo = video
-                    selectedIndex = index
-                    isVideoPlaybackActive = true
-                    logger.info("✅ NAVIGATION: Successfully preloaded and navigating to video at index \(index)")
-                } else {
-                    logger.info("⚠️ NAVIGATION: Preload completed but state changed, cancelling navigation to index \(index)")
+            // Wait for player to be ready with timeout
+            try await withTimeout(seconds: 5) {
+                while true {
+                    if let player = videoManager.player(for: index),
+                       player.currentItem?.status == .readyToPlay,
+                       player.currentItem?.isPlaybackLikelyToKeepUp == true {
+                        return
+                    }
+                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
                 }
             }
+            
+            // Navigate when ready
+            selectedVideo = video
+            selectedIndex = index
+            isVideoPlaybackActive = true
+            preloadingIndex = nil
         } catch {
-            logger.error("❌ NAVIGATION: Failed to preload video at index \(index): \(error.localizedDescription)")
-            await MainActor.run {
-                errorMessage = error.localizedDescription
-                showError = true
-                videoManager.cleanup(context: .error)
+            preloadingIndex = nil
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+    
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
             }
+            
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw NSError(domain: "com.Gauntlet.LikeThese", code: -1, 
+                    userInfo: [NSLocalizedDescriptionKey: "Operation timed out"])
+            }
+            
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
         }
     }
 }

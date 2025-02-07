@@ -11,8 +11,22 @@ class VideoViewModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var isLoadingMore: Bool = false
     @Published var error: Error?
+    @Published var replacingVideoId: String?
+    @Published private var loadingVideoIds: Set<String> = []
     private let firestoreService = FirestoreService.shared
     private let pageSize = 4 // Only load 4 at a time
+    
+    func isLoadingVideo(_ videoId: String) -> Bool {
+        return loadingVideoIds.contains(videoId)
+    }
+    
+    func setLoadingState(for videoId: String, isLoading: Bool) {
+        if isLoading {
+            loadingVideoIds.insert(videoId)
+        } else {
+            loadingVideoIds.remove(videoId)
+        }
+    }
     
     func loadInitialVideos() async {
         logger.debug("📥 Starting initial video load")
@@ -33,19 +47,23 @@ class VideoViewModel: ObservableObject {
     }
     
     func loadMoreVideosIfNeeded(currentIndex: Int) async {
-        // Always try to load a new random video when we're 3 videos away from the end
+        // Load a batch of videos when we're 3 videos away from the end
         if currentIndex >= videos.count - 3 && !isLoadingMore {
-            logger.debug("📥 Loading random video after index \(currentIndex)")
+            logger.debug("📥 Loading batch of videos after index \(currentIndex)")
             isLoadingMore = true
             error = nil
             
             do {
-                // Load a single random video
-                let newVideo = try await firestoreService.fetchRandomVideo()
-                logger.debug("✅ Loaded random video: \(newVideo.id)")
-                videos.append(newVideo)
+                // Load a batch of random videos
+                var newVideos: [Video] = []
+                for _ in 0..<pageSize {
+                    let newVideo = try await firestoreService.fetchRandomVideo()
+                    newVideos.append(newVideo)
+                }
+                logger.debug("✅ Loaded \(newVideos.count) random videos")
+                videos.append(contentsOf: newVideos)
             } catch {
-                logger.error("❌ Error loading random video: \(error.localizedDescription)")
+                logger.error("❌ Error loading random videos: \(error.localizedDescription)")
                 self.error = error
             }
             
@@ -61,35 +79,23 @@ class VideoViewModel: ObservableObject {
     
     // Add video removal functionality
     func removeVideo(_ videoId: String) async {
-        logger.debug("🗑️ Removing video: \(videoId)")
-        
-        // Find and remove the video
         if let index = videos.firstIndex(where: { $0.id == videoId }) {
-            // Remove the video first
-            videos.remove(at: index)
-            logger.debug("✅ Removed video at index \(index)")
-            
-            // Load a replacement video
             do {
-                // Start loading the replacement immediately
-                let newVideoTask = Task { try await firestoreService.fetchRandomVideo() }
+                // Set loading state
+                replacingVideoId = videoId
                 
-                // Give time for removal animation
-                try await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                // Fetch new video first
+                let newVideo = try await firestoreService.fetchRandomVideo()
                 
-                // Get the new video
-                let newVideo = try await newVideoTask.value
-                logger.debug("✅ Loaded replacement video: \(newVideo.id)")
-                
-                // Insert with animation
-                await MainActor.run {
-                    withAnimation(.spring()) {
-                        videos.insert(newVideo, at: index)
-                    }
-                }
+                // Atomic update
+                var updatedVideos = videos
+                updatedVideos.remove(at: index)
+                updatedVideos.insert(newVideo, at: index)
+                videos = updatedVideos
+                replacingVideoId = nil
             } catch {
-                logger.error("❌ Error loading replacement video: \(error.localizedDescription)")
                 self.error = error
+                replacingVideoId = nil
             }
         }
     }

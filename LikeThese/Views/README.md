@@ -62,3 +62,9 @@ This implementation ensures:
 - Comfortable touch targets for gestures
 - Efficient use of screen space
 - Smooth transitions during interactions
+- Enhanced visual feedback during swipes:
+  - Progressive opacity changes
+  - Subtle scale reduction
+  - 3D rotation effects
+  - Double-tap haptic feedback
+  - Spring-based animations

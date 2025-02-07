@@ -273,6 +273,24 @@ class FirestoreService {
                 let video = try await validateVideoData(data, documentId: document.documentID)
                 videos.append(video)
             }
+            
+            // If we don't have enough videos, replicate existing ones
+            if videos.count < limit {
+                logger.debug("⚠️ Not enough videos, replicating existing ones")
+                while videos.count < limit {
+                    // Take a random video from the existing ones and create a copy
+                    if let originalVideo = videos.randomElement() {
+                        let replicatedVideo = Video(
+                            id: "\(originalVideo.id)_replica_\(UUID().uuidString)",
+                            url: originalVideo.url,
+                            thumbnailUrl: originalVideo.thumbnailUrl,
+                            timestamp: Timestamp(date: Date())
+                        )
+                        videos.append(replicatedVideo)
+                    }
+                }
+            }
+            
             return videos
         }
     }
@@ -417,7 +435,21 @@ class FirestoreService {
             let data = randomDoc.data()
             
             logger.debug("🎲 Selected random video: \(randomDoc.documentID)")
-            return try await validateVideoData(data, documentId: randomDoc.documentID)
+            let video = try await validateVideoData(data, documentId: randomDoc.documentID)
+            
+            // If this is a replica request and we're running low on videos,
+            // create a replica instead of fetching a new one
+            if snapshot.documents.count < 4 {
+                logger.debug("⚠️ Low on videos, creating replica")
+                return Video(
+                    id: "\(video.id)_replica_\(UUID().uuidString)",
+                    url: video.url,
+                    thumbnailUrl: video.thumbnailUrl,
+                    timestamp: Timestamp(date: Date())
+                )
+            }
+            
+            return video
         }
     }
 } 

@@ -1,39 +1,134 @@
-## Phase 10: Multiswipe: Quick Video Removal Features
+## Phase 10: Multiswipe & Quick Video Removal Features
 
-### Checklist
-[x] **Basic Swipe-to-Remove**: Add the ability for users to swipe up on any video in the grid to instantly remove it from view (like swiping emails in a mail app).
+### Updated Implementation Checklist
 
-[x] **Grid Layout Spacing**
-    - Add optimal spacing between videos in 2x2 grid that:
-        - [x] Maintains correct video aspect ratios (no stretching/squishing)
-        - [x] Scales appropriately with screen size
-        - [x] Eliminates excess space around grid edges
-        - [x] Provides sufficient touch targets between videos
+Below is a single, expanded, and detailed checklist that merges both the feature tasks and the previously separate "Implementation Issues and Solutions" into one coherent list. Tasks are arranged from easier (or prerequisite) to more complex, with exceptions where tackling a more challenging task sooner simplifies subsequent items.
 
-[ ] **Video Replacement System**
-    - Sequential Video Loading:
-        - [ ] Fetch and load new videos one at a time
-        - [ ] Show loading state for each empty slot
-        - [ ] Preload thumbnails when possible
-        - [ ] Maintain grid stability during replacements
+---
 
-[ ] **Multi-Video Swipe Gestures**
-    - Four-Video Center Swipe:
-        - [ ] Detect swipe up gesture in center space where all four videos meet
-        - [ ] Implement 40% swipe distance threshold
-        - [ ] Remove all four videos simultaneously
-        - [ ] Synchronize upward animation for all videos
-    - Two-Video Swipe:
-        - [ ] Detect swipe up gesture in space between any two adjacent videos
-        - [ ] Implement 35% swipe distance threshold
-        - [ ] Remove only the two videos touching the swiped space
-        - [ ] Synchronize upward animation for both affected videos
+#### 1. Continuous Availability of Videos
+- [x] Increase the backend fetch limit so there are always more than 4 videos available:
+  - [x] Implement dynamic fetching to trigger whenever a video is removed from the grid (prefetch a new one if fewer than a threshold remain).
+  - [x] Maintain an in-memory buffer of extra videos to avoid empty slots or stalling gestures.
+  - [x] Expand the server-side pool or replicate existing videos for testing.  
+    - **Notes**: If a fetch error occurs, revert the removal or show an error item, never leave a blank cell.
 
-[ ] **Visual Feedback**
-    - [ ] Add opacity changes during swipe gestures
-    - [ ] Implement smooth upward animations matching existing style
-    - [ ] Add haptic feedback on successful removals
-    - [ ] Show loading indicators during video replacements
+#### 2. Grid Stability and Video Replacement
+- [ ] Ensure consistent grid updates on each swipe, preventing dropped or disappearing videos:
+  - [ ] Adopt atomic updates when removing and adding videos to avoid partial states.
+  - [ ] If a swipe attempts to remove a video that is already being removed, queue the gesture until the previous transition completes.
+  - [ ] Guarantee the grid always has an equal number of videos, never dropping below 4 unless intentionally.
+  - [ ] Use concurrency tools (e.g., `MainActor.run`) to ensure UI doesn't do partial re-renders during new video data arrivals.
+
+#### 3. Loading States and Indication
+- [ ] Show a loading state for any slot in the grid that's empty or being fetched:
+  - [ ] Display a spinner or placeholder whenever a new slot is pending.
+  - [ ] Confirm each slot transitions from empty → loading → filled in the logs.
+  - [ ] Use blurred previews if thumbnail prefetching is available.
+
+#### 4. Basic Swipe-to-Remove (Check Stability)
+- [x] Existing swipe-up logic is in place.  
+- [ ] Verify old video is fully removed before the new one is shown (resolve the double-appearance glitch):
+  - [ ] Ensure old video's final removal triggers the new video's insertion in a single transaction.
+
+#### 5. Correct Animation Behavior (Swipe Up/Down)
+- [ ] Eliminate the double-appearance and "reappearing old video" bug:
+  - [ ] For **swipe-up**: old video drags upward, new video animates in from below.
+  - [ ] For **swipe-down**: old video drags downward, new video animates in from above.
+  - [ ] Clean up concurrency so the same index's video doesn't get queued multiple times in rapid succession.
+  - [ ] Log "cleanup" only after the old video is visibly gone.
+
+#### 6. Multi-Video Swipe Gestures
+**Two-Video Swipe**  
+- [ ] Detect swipe in the shared boundary between horizontally/vertically adjacent videos.  
+- [ ] Use a ~35% swipe distance threshold to confirm removal.  
+- [ ] Remove those two videos simultaneously and run replacements in parallel atomic updates.  
+- [ ] Animate both videos upward/downward together.
+
+**Four-Video Center Swipe**  
+- [ ] Detect swipe-up in the center intersection of the 2×2 grid.  
+- [ ] Use a ~40% threshold to confirm removal.  
+- [ ] Remove all four videos at once with synchronized upward or downward animations.  
+- [ ] Log the group removal event and confirm the grid rebinds to four new videos if they are all removed together.
+
+#### 7. Visual Feedback
+- [ ] Opacity Adjustments: fade out the old video as it's swiped away, fade in the new one from 0% → 100%.  
+- [ ] Smooth Animations: match existing easing curves, check final positions in logs.  
+- [ ] Haptic Feedback: minimal haptic on successful removal.  
+- [ ] Loading Indicators: already included in "Loading States and Indication."
+
+#### 8. Video Replacement System
+- [ ] Fetch and load new videos sequentially:
+  - [ ] One at a time to avoid collisions (or queue them if multiple requests are triggered).  
+  - [ ] Preload thumbnails if possible.  
+  - [ ] Maintain stable ordering in the grid to avoid flicker or reordering.  
+- [ ] Confirm final "preload" logs appear for each new index.  
+- [ ] Test repeated swipes to ensure placeholders are never missing.
+
+#### 9. Edge Case Handling
+- [ ] Multi-swipe Race Conditions:
+  - [ ] Avoid double or triple fetch triggers if another swipe arrives before the previous fetch completes.
+  - [ ] Queue or discard redundant fetch calls as needed.
+- [ ] Network Reliability:
+  - [ ] Handle slow or failed fetch with placeholders and graceful fallback, never freeze UI.
+  - [ ] Add error logging for timeouts or connectivity issues.
+
+---
+
+### Notes & File References
+
+1. **Animation Bug: Old Video Reappears**  
+   - *VideoViewModel.swift: lines ~120-140*  
+     - Implement single-pass transitions (`var updatedVideos = videos`) and atomic reassignments (`videos = updatedVideos`) so the old video is removed only once.  
+   - *InspirationsGridView.swift: lines ~80-95*  
+     - Synchronize the `onRemoveCompleted` callback to ensure the new video creation only happens after the old video is cleared.
+
+2. **Disappearing Video in Grid**  
+   - *InspirationsGridView.swift: lines ~160-180*  
+     - Immediately fetch/queue a replacement video when a slot is removed. If fetch fails, revert removal or display a placeholder with error state.  
+   - *FirestoreService.swift: lines ~45-60*  
+     - Expand fetch logic to attempt multiple fallback sources if the main fetch fails (like re-using an older video).
+
+3. **Running Out of Videos**  
+   - *FirestoreService.swift: lines ~20-40*  
+     - Modify the default fetch limit from 4 to 8 or higher.  
+   - *InspirationsGridViewModel.swift: lines ~70-85*  
+     - Store an "in-memory buffer." If the buffer is below 4, automatically fetch more.
+
+4. **Gesture Conflicts with Observers**  
+   - *InspirationsGridView.swift: lines ~100-120*  
+     - Use `isSwipeInProgress = true/false` flags to gate other UI updates.  
+   - *VideoViewModel.swift: lines ~150-165*  
+     - Wrap video state changes in `await MainActor.run` blocks to avoid partial re-render conflicts.
+
+5. **Performance & Logging**  
+   - *Logging.swift: lines ~10-30*  
+     - Combine repeated logs with a throttle or deduplicate logic.  
+   - *InspirationsGridViewModel.swift: lines ~180-200*  
+     - Conditionally log only meaningful changes, skipping repeated "cleanup" calls for the same video.
+
+6. **Two-Video and Four-Video Swipes**  
+   - *InspirationsGridView.swift: lines ~205-255*  
+     - Implement multi-swipe detection by checking gestures in gaps or the center intersection.  
+   - *VideoViewModel.swift: lines ~170-190*  
+     - Add unified "replaceMultipleVideos" method that runs multiple fetch requests in parallel, then assigns them atomically with a single update statement.
+
+7. **Sequential Fetching & Concurrency**  
+   - *FirestoreService.swift: lines ~60-80*  
+     - Add a `TaskQueue` or single-flight pattern to queue fetches if one is already in flight.  
+   - *InspirationsGridViewModel.swift: lines ~90-110*  
+     - Track the number of active fetch calls; if a new fetch is requested while one is running, either queue it or preempt the old request gracefully.
+
+8. **Network Reliability**  
+   - *FirestoreService.swift: lines ~85-110*  
+     - Add `do/catch` with retries. If a video fetch fails, show a "retry in 5 seconds" placeholder in the specific grid cell.  
+   - *InspirationsGridView.swift: lines ~220-235*  
+     - Display a network error overlay or skeleton UI if repeated failures occur.
+
+---
+
+This merged checklist ensures each fix or feature is associated with a short explanation ("what" and "why/how") plus references to likely impacted lines in your code. Adjust exact file paths and line numbers as needed to match your repository's structure and any recent refactoring.
+
 
 ### Implementation Issues and Solutions
 

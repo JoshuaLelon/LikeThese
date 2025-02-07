@@ -1157,3 +1157,191 @@ Next steps for investigation:
 3. Investigate potential deadlocks in state management
 4. Consider simplifying the state machine while maintaining the benefits of preloading
 5. Add more detailed logging around gesture handling and state transitions
+
+### Attempted Fix Documentation (2024-03-21)
+
+#### Original Code Structure
+The original implementation had two main components:
+
+1. VideoManager.swift:
+```swift
+enum TransitionState: Equatable {
+    case none
+    case gesture(from: Int, to: Int)
+    case autoAdvance(from: Int, to: Int)
+    case error
+}
+
+// Complex state management with multiple transition types
+func beginTransition(_ newTransition: TransitionState, completion: @escaping () -> Void) {
+    if case .gesture(_, _) = transitionState {
+        isProcessingTransition = false
+        transitionState = .none
+    }
+    transitionState = newTransition
+    completion()
+}
+
+// Separate handling for different transition types
+func prepareForTransition(from currentIndex: Int, to targetIndex: Int) {
+    let keepRange = KeepRange(
+        start: min(currentIndex, targetIndex) - 2,
+        end: max(currentIndex, targetIndex) + 2
+    )
+    // Complex cleanup and state management
+}
+```
+
+2. VideoPlaybackView.swift:
+```swift
+private func handleSwipeUp() {
+    guard let current = currentIndex else { return }
+    
+    Task {
+        do {
+            // Try to get next video
+            if let nextVideo = viewModel.getNextVideo(from: current),
+               let url = URL(string: nextVideo.url) {
+                // Begin gesture transition
+                videoManager.beginTransition(.gesture(from: current, to: current + 1)) {
+                    Task { @MainActor in
+                        transitionState = .transitioning(from: current, to: current + 1)
+                        transitionOpacity = 1
+                        incomingOffset = UIScreen.main.bounds.height
+                    }
+                }
+                
+                // Complex preloading and playback logic
+                if let player = videoManager.player(for: current + 1) {
+                    await player.seek(to: .zero)
+                    player.playImmediately(atRate: 1.0)
+                }
+            }
+        } catch {
+            // Error handling
+        }
+    }
+}
+```
+
+#### Identified Problems
+1. Over-engineered state management with multiple transition types causing coordination issues
+2. Race conditions between gesture handling and state transitions
+3. Complex cleanup logic potentially removing videos too aggressively
+4. Asynchronous operations not properly coordinated
+5. Multiple sources of truth for transition state
+
+#### High-Level Solution Approach
+The attempted solution aimed to:
+1. Simplify the transition state system to a single transitioning state
+2. Make state changes more atomic and predictable
+3. Improve coordination between animation and video playback
+4. Implement a simpler sliding window for video management
+5. Ensure proper cleanup timing
+
+#### Implemented Changes
+1. Simplified TransitionState enum:
+```swift
+enum TransitionState: Equatable {
+    case none
+    case transitioning(from: Int, to: Int)
+}
+```
+
+2. Streamlined transition management:
+```swift
+func beginTransition(_ newTransition: TransitionState, completion: @escaping () -> Void) {
+    transitionQueue.removeAll()
+    if case .transitioning(_, _) = transitionState {
+        isProcessingTransition = false
+        transitionState = .none
+    }
+    transitionState = newTransition
+    completion()
+}
+```
+
+3. Simplified video window management:
+```swift
+let keepRange = max(0, targetIndex - 2)...min(targetIndex + 2, playerUrls.keys.max() ?? targetIndex)
+```
+
+4. Improved gesture handling:
+```swift
+private func handleSwipeUp() {
+    guard let current = currentIndex,
+          current + 1 < videos.count,
+          let nextVideo = videos[safe: current + 1],
+          let url = URL(string: nextVideo.url) else {
+        return
+    }
+    
+    Task {
+        // Begin transition immediately
+        videoManager.beginTransition(.transitioning(from: current, to: current + 1)) {
+            // Immediate animation start
+        }
+        
+        // Ensure preloading before playback
+        try await videoManager.preloadVideo(url: url, forIndex: current + 1)
+        
+        // Start playing and complete transition
+        videoManager.startPlaying(at: current + 1)
+    }
+}
+```
+
+#### Actual Results
+The solution did not fix the core issue:
+1. Users are still limited to swiping through only 4 videos
+2. Black screens still appear during transitions
+3. Gesture recognition remains inconsistent
+4. Video preloading is not properly synchronized
+
+#### Analysis of Failure
+The solution failed because:
+
+1. **Root Cause Misidentification**: 
+   - We focused on simplifying state management when the core issue might be in the video loading pipeline
+   - The 4-video limit could be due to resource management rather than state complexity
+
+2. **Architectural Issues**:
+   - The sliding window approach still doesn't properly handle video loading/unloading
+   - The cleanup logic might be too aggressive, even with simplified states
+   - The preloading strategy may not be properly coordinated with the UI layer
+
+3. **Resource Management**:
+   - We didn't address potential memory management issues
+   - AVPlayer instances might not be properly recycled
+   - Video buffer management might be suboptimal
+
+4. **Timing Problems**:
+   - The new implementation still has potential race conditions
+   - Animation timing might not be properly synchronized with video loading
+   - State updates might be happening in the wrong order
+
+#### Next Steps
+1. Investigate the video loading pipeline specifically:
+   - How videos are loaded into memory
+   - When and why videos are being unloaded
+   - Memory usage patterns during swipes
+
+2. Implement proper video recycling:
+   - Keep a pool of reusable AVPlayer instances
+   - Implement proper video buffer management
+   - Ensure cleanup only happens when necessary
+
+3. Review the preloading strategy:
+   - Start preloading earlier in the sequence
+   - Maintain larger buffer of preloaded videos
+   - Implement smarter cleanup based on memory pressure
+
+4. Add comprehensive logging:
+   - Track video loading/unloading events
+   - Monitor memory usage
+   - Log all state transitions with timestamps
+
+5. Consider architectural changes:
+   - Separate video management from playback control
+   - Implement a proper video buffer pool
+   - Review the relationship between VideoManager and VideoPlaybackView

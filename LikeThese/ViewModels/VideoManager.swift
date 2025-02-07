@@ -74,12 +74,25 @@ enum PreloadError: Error {
 
 enum TransitionState: Equatable {
     case none
-    case transitioning(from: Int, to: Int)
+    case gesture(from: Int, to: Int)
+    case autoAdvance(from: Int, to: Int)
+    case error
     
     var isActive: Bool {
         switch self {
-        case .none: return false
-        case .transitioning: return true
+        case .none:
+            return false
+        default:
+            return true
+        }
+    }
+    
+    var indices: (from: Int, to: Int)? {
+        switch self {
+        case .gesture(let from, let to), .autoAdvance(let from, let to):
+            return (from, to)
+        case .none, .error:
+            return nil
         }
     }
 }
@@ -516,7 +529,7 @@ class VideoManager: NSObject, ObservableObject {
                     logger.info("🔄 VIDEO COMPLETION ACTION: Video \(index) finished naturally while playing - initiating auto-advance sequence")
                     
                     // Begin auto-advance transition
-                    self.beginTransition(.transitioning(from: index, to: index + 1)) {
+                    self.beginTransition(.autoAdvance(from: index, to: index + 1)) {
                         // Pause the current video to prevent looping
                         player.pause()
                         
@@ -754,17 +767,15 @@ class VideoManager: NSObject, ObservableObject {
             await MainActor.run {
                 self.currentState = .loading(index: targetIndex)
                 self.activeVideoIndex = targetIndex
-                
-                // Pause current video immediately to prevent overlap
-                if let currentPlayer = self.players[currentIndex] {
-                    currentPlayer.pause()
-                }
             }
             
-            // Keep a window of videos around the current position
-            let keepRange = max(0, targetIndex - 2)...min(targetIndex + 2, playerUrls.keys.max() ?? targetIndex)
+            // Calculate keep range (include more videos for smoother navigation)
+            let keepRange = KeepRange(
+                start: min(currentIndex, targetIndex) - 2,
+                end: max(currentIndex, targetIndex) + 2
+            )
             
-            // Cleanup videos outside the window
+            // Cleanup distant players
             for index in self.players.keys where !keepRange.contains(index) {
                 self.performCleanup(for: index)
             }
@@ -781,23 +792,60 @@ class VideoManager: NSObject, ObservableObject {
     func finishTransition(at index: Int) {
         logger.info("✅ TRANSITION: Finishing transition to index \(index)")
         
+        // Ensure we're in the correct state
+        guard case .playing(let currentIndex) = currentState, currentIndex == index else {
+            currentState = .playing(index: index)
+            return
+        }
+        
         // Update active video index
         activeVideoIndex = index
-        currentState = .playing(index: index)
         
-        // Schedule preloading of next videos
-        Task {
-            // Preload next 2 videos if available
-            for i in (index + 1)...(index + 2) {
-                if let url = playerUrls[i] {
-                    do {
-                        try await preloadVideo(url: url, forIndex: i)
-                    } catch {
-                        logger.error("❌ PRELOAD ERROR: Failed to preload video at index \(i): \(error.localizedDescription)")
+        // Schedule cleanup of distant videos and preload new ones
+        Task { @MainActor in
+            // Keep a larger window of videos around the current index
+            let keepRange = KeepRange(
+                start: index - preloadWindowSize,
+                end: index + preloadWindowSize
+            )
+            
+            // Cleanup videos far outside the keep range
+            for videoIndex in players.keys where videoIndex < keepRange.start - preloadWindowSize || videoIndex > keepRange.end + preloadWindowSize {
+                performCleanup(for: videoIndex)
+            }
+            
+            // Check if we need to preload more videos
+            let remainingForward = keepRange.end - index
+            if remainingForward <= preloadTriggerThreshold {
+                // Trigger preload of next batch of videos
+                for i in (keepRange.end + 1)...(keepRange.end + preloadWindowSize) {
+                    if let url = playerUrls[i] {
+                        do {
+                            try await preloadVideo(url: url, forIndex: i)
+                        } catch {
+                            logger.error("❌ PRELOAD ERROR: Failed to preload video at index \(i): \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
+            
+            // Also check backward preloading
+            let remainingBackward = index - keepRange.start
+            if remainingBackward <= preloadTriggerThreshold {
+                // Trigger preload of previous batch of videos
+                for i in (keepRange.start - preloadWindowSize)...(keepRange.start - 1) where i >= 0 {
+                    if let url = playerUrls[i] {
+                        do {
+                            try await preloadVideo(url: url, forIndex: i)
+                        } catch {
+                            logger.error("❌ PRELOAD ERROR: Failed to preload video at index \(i): \(error.localizedDescription)")
+                        }
                     }
                 }
             }
         }
+        
+        logger.info("✅ TRANSITION: Successfully finished transition to \(index)")
     }
     
     private func setupObservers(for index: Int, player: AVPlayer) {
@@ -851,7 +899,7 @@ class VideoManager: NSObject, ObservableObject {
         transitionQueue.removeAll()
         
         // If there's an active transition, cancel it
-        if case .transitioning(_, _) = transitionState {
+        if case .gesture(_, _) = transitionState {
             // Complete the current transition immediately
             isProcessingTransition = false
             transitionState = .none
@@ -886,7 +934,7 @@ class VideoManager: NSObject, ObservableObject {
     }
 
     func handleTransition(from: Int, to: Int) {
-        beginTransition(.transitioning(from: from, to: to), completion: {
+        beginTransition(.gesture(from: from, to: to), completion: {
             // Transition logic
         })
     }

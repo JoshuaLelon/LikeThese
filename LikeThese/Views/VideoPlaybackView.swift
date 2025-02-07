@@ -232,59 +232,54 @@ struct VideoPlaybackView: View {
         }
     }
     
-    private func handleSwipeUp() {
+    private func handleSwipeDown() {
         guard let current = currentIndex,
-              current + 1 < videos.count,
-              let nextVideo = videos[safe: current + 1],
-              let url = URL(string: nextVideo.url) else {
+              current - 1 >= 0 else {
             return
         }
         
         Task {
             do {
-                // Begin transition immediately
-                videoManager.beginTransition(.transitioning(from: current, to: current + 1)) {
+                // Begin gesture transition with immediate effect
+                videoManager.beginTransition(.gesture(from: current, to: current - 1)) {
                     Task { @MainActor in
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            transitionState = .transitioning(from: current, to: current + 1)
-                            transitionOpacity = 0
-                            incomingOffset = UIScreen.main.bounds.height
-                        }
+                        transitionState = .transitioning(from: current, to: current - 1)
+                        transitionOpacity = 1
+                        incomingOffset = -UIScreen.main.bounds.height
                     }
                 }
                 
-                // Ensure next video is preloaded
-                try await videoManager.preloadVideo(url: url, forIndex: current + 1)
-                
-                // Start playing next video
-                videoManager.startPlaying(at: current + 1)
-                
-                // Complete transition animation
-                await MainActor.run {
+                // Try to get previous video from sequence
+                if let previousVideo = viewModel.getPreviousVideo(from: current),
+                   let url = URL(string: previousVideo.url) {
+                    // Ensure previous video is preloaded and ready
+                    try await videoManager.preloadVideo(url: url, forIndex: current - 1)
+                    
+                    // Start playing immediately
+                    if let player = videoManager.player(for: current - 1) {
+                        await player.seek(to: .zero)
+                        player.playImmediately(atRate: 1.0)
+                        videoManager.startPlaying(at: current - 1)
+                    }
+                    
+                    // Quick animation
                     withAnimation(.easeInOut(duration: 0.2)) {
                         incomingOffset = 0
+                        transitionOpacity = 0
                     }
-                }
-                
-                try await Task.sleep(nanoseconds: 200_000_000)
-                
-                // Update state
-                await MainActor.run {
-                    currentIndex = current + 1
-                    transitionState = .none
-                    transitionOpacity = 1
-                    isGestureActive = false
-                }
-                
-                videoManager.endTransition()
-                
-                // Preload next video in background
-                if let nextNextVideo = videos[safe: current + 2],
-                   let nextUrl = URL(string: nextNextVideo.url) {
-                    try await videoManager.preloadVideo(url: nextUrl, forIndex: current + 2)
+                    
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                    
+                    await MainActor.run {
+                        currentIndex = current - 1
+                        transitionState = .none
+                        transitionOpacity = 1
+                    }
+                    
+                    videoManager.endTransition()
                 }
             } catch {
-                logger.error("❌ Failed to handle swipe up: \(error.localizedDescription)")
+                logger.error("❌ Failed to handle swipe down: \(error.localizedDescription)")
                 errorMessage = error.localizedDescription
                 showError = true
                 videoManager.cleanup(context: .error)
@@ -292,53 +287,57 @@ struct VideoPlaybackView: View {
         }
     }
     
-    private func handleSwipeDown() {
-        guard let current = currentIndex,
-              current > 0,
-              let previousVideo = videos[safe: current - 1],
-              let url = URL(string: previousVideo.url) else {
-            return
-        }
+    private func handleSwipeUp() {
+        guard let current = currentIndex else { return }
         
         Task {
             do {
-                // Begin transition immediately
-                videoManager.beginTransition(.transitioning(from: current, to: current - 1)) {
+                // Begin gesture transition with immediate effect
+                videoManager.beginTransition(.gesture(from: current, to: current + 1)) {
                     Task { @MainActor in
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            transitionState = .transitioning(from: current, to: current - 1)
-                            transitionOpacity = 0
-                            incomingOffset = -UIScreen.main.bounds.height
-                        }
+                        transitionState = .transitioning(from: current, to: current + 1)
+                        transitionOpacity = 1
+                        incomingOffset = UIScreen.main.bounds.height
                     }
                 }
                 
-                // Ensure previous video is preloaded
-                try await videoManager.preloadVideo(url: url, forIndex: current - 1)
-                
-                // Start playing previous video
-                videoManager.startPlaying(at: current - 1)
-                
-                // Complete transition animation
-                await MainActor.run {
+                // Try to get next video
+                if let nextVideo = viewModel.getNextVideo(from: current),
+                   let url = URL(string: nextVideo.url) {
+                    // Ensure next video is preloaded and ready
+                    try await videoManager.preloadVideo(url: url, forIndex: current + 1)
+                    
+                    // Start playing immediately
+                    if let player = videoManager.player(for: current + 1) {
+                        await player.seek(to: .zero)
+                        player.playImmediately(atRate: 1.0)
+                        videoManager.startPlaying(at: current + 1)
+                    }
+                    
+                    // Quick animation
                     withAnimation(.easeInOut(duration: 0.2)) {
                         incomingOffset = 0
+                        transitionOpacity = 0
+                    }
+                    
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                    
+                    await MainActor.run {
+                        currentIndex = current + 1
+                        transitionState = .none
+                        transitionOpacity = 1
+                    }
+                    
+                    videoManager.endTransition()
+                    
+                    // Preload next video in background
+                    if let nextNextVideo = viewModel.getNextVideo(from: current + 1),
+                       let nextUrl = URL(string: nextNextVideo.url) {
+                        try await videoManager.preloadVideo(url: nextUrl, forIndex: current + 2)
                     }
                 }
-                
-                try await Task.sleep(nanoseconds: 200_000_000)
-                
-                // Update state
-                await MainActor.run {
-                    currentIndex = current - 1
-                    transitionState = .none
-                    transitionOpacity = 1
-                    isGestureActive = false
-                }
-                
-                videoManager.endTransition()
             } catch {
-                logger.error("❌ Failed to handle swipe down: \(error.localizedDescription)")
+                logger.error("❌ Failed to handle swipe up: \(error.localizedDescription)")
                 errorMessage = error.localizedDescription
                 showError = true
                 videoManager.cleanup(context: .error)

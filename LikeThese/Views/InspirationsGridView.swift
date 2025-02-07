@@ -234,111 +234,89 @@ struct InspirationsGridView: View {
     
     private func gridItem(video: Video, index: Int) -> some View {
         let isReplacing = video.id == viewModel.replacingVideoId
-        let isLoading = isReplacing || viewModel.isLoadingVideo(video.id) || loadingSlots.contains(index)
-        let isPreloadingThumbnail = preloadingThumbnails.contains(index)
+        let isLoading = isReplacing || viewModel.isLoadingVideo(video.id)
         let isBeingDragged = video.id == swipingVideoId
         let isPartOfMultiSwipe = swipingVideos.contains(video.id)
-        
-        if isLoading {
-            logger.debug("⏳ GRID ITEM: Loading state for video \(video.id) at index \(index)")
-        }
-        if isPreloadingThumbnail {
-            logger.debug("🔄 GRID ITEM: Preloading thumbnail for video \(video.id) at index \(index)")
-        }
         
         return AsyncImage(url: video.thumbnailUrl.flatMap { URL(string: $0) }) { phase in
             ZStack {
                 switch phase {
                 case .empty:
-                    LoadingView(message: isPreloadingThumbnail ? "Preloading..." : "Loading thumbnail...")
-                    .onAppear {
-                        logger.debug("⏳ THUMBNAIL: Started loading for video \(video.id)")
-                    }
+                    LoadingView(message: "Loading thumbnail...")
                 case .success(let image):
                     image
                         .resizable()
-                        .aspectRatio(9/16, contentMode: .fill)
-                        .onAppear {
-                            logger.debug("✅ THUMBNAIL: Successfully loaded for video \(video.id)")
-                        }
+                        .aspectRatio(contentMode: .fill)
                 case .failure:
                     LoadingView(message: "Failed to load", isError: true)
-                        .onAppear {
-                            logger.error("❌ THUMBNAIL: Failed to load for video \(video.id)")
-                        }
                 @unknown default:
                     LoadingView(message: "Loading...")
                 }
                 
                 if isLoading {
                     Color.black.opacity(0.7)
-                    VStack(spacing: 8) {
+                    VStack {
                         ProgressView()
-                            .scaleEffect(1.5)
-                        Text(isReplacing ? "Replacing video..." : 
-                             (isPreloadingThumbnail ? "Preloading..." : "Loading..."))
+                            .tint(.white)
+                        Text(isReplacing ? "Loading new video..." : "Removing...")
                             .foregroundColor(.white)
                             .font(.caption)
-                    }
-                }
-            }
-            .clipped()
-            .contentShape(Rectangle())
-            .opacity(isPartOfMultiSwipe ? multiSwipeOpacity : (isBeingDragged ? swipeOpacity : 1.0))
-            .offset(y: isBeingDragged ? swipeOffset : (isPartOfMultiSwipe ? multiSwipeOffset : 0))
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isBeingDragged ? swipeOffset : multiSwipeOffset)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isSwipingGap && !isLoading {
-                            isSwipeInProgress = true
-                            swipingVideoId = video.id
-                            swipeOffset = value.translation.height
-                            logger.debug("🔄 SWIPE: Single video swipe in progress - Video: \(video.id), Offset: \(value.translation.height)")
-                            
-                            // Update opacity based on swipe progress
-                            withAnimation(.easeInOut(duration: 0.1)) {
-                                swipeOpacity = calculateOpacity(for: value.translation.height, threshold: 0.3)
-                            }
-                        }
-                    }
-                    .onEnded { value in
-                        if !isSwipingGap && !isLoading {
-                            let threshold: CGFloat = -90 // 30% of 300px height
-                            if value.translation.height < threshold {
-                                logger.debug("🗑️ SWIPE: Removing single video \(video.id) after successful swipe")
-                                triggerHapticFeedback()
-                                
-                                Task {
-                                    loadingSlots.insert(index)
-                                    logger.debug("⏳ LOADING: Started loading state for index \(index)")
-                                    await viewModel.removeVideo(video.id)
-                                    logger.debug("✅ REMOVAL: Completed removal of video \(video.id)")
-                                    loadingSlots.remove(index)
-                                    logger.debug("✨ CLEANUP: Cleared loading state for index \(index)")
-                                }
-                            } else {
-                                logger.debug("↩️ SWIPE: Cancelled swipe for video \(video.id)")
-                                withAnimation(.spring()) {
-                                    swipeOffset = 0
-                                    swipeOpacity = 1.0
-                                }
-                            }
-                            isSwipeInProgress = false
-                            swipingVideoId = nil
-                        }
-                    }
-            )
-            .onTapGesture {
-                if !isSwipeInProgress && !isSwipingGap && !isLoading {
-                    Task {
-                        await navigateToVideo(at: index)
+                            .padding(.top, 4)
                     }
                 }
             }
         }
         .transition(.opacity)
         .animation(.easeInOut, value: isLoading)
+        .offset(y: isBeingDragged ? swipeOffset : (isPartOfMultiSwipe ? multiSwipeOffset : 0))
+        .opacity(isPartOfMultiSwipe ? multiSwipeOpacity : (isBeingDragged ? swipeOpacity : 1.0))
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    if !isSwipingGap && !isLoading {
+                        isSwipeInProgress = true
+                        swipingVideoId = video.id
+                        swipeOffset = value.translation.height
+                        
+                        // Update opacity based on swipe progress
+                        withAnimation(.easeInOut(duration: 0.1)) {
+                            swipeOpacity = calculateOpacity(for: value.translation.height, threshold: -45)
+                        }
+                    }
+                }
+                .onEnded { value in
+                    if !isSwipingGap && !isLoading {
+                        let threshold: CGFloat = -45 // Reduced from -90 to -45 for easier swipes
+                        if value.translation.height < threshold {
+                            logger.debug("🗑️ SWIPE: Removing single video \(video.id) after successful swipe")
+                            triggerHapticFeedback()
+                            
+                            Task {
+                                loadingSlots.insert(index)
+                                logger.debug("⏳ LOADING: Started loading state for index \(index)")
+                                await viewModel.removeVideo(video.id)
+                                logger.debug("✅ REMOVAL: Completed removal of video \(video.id)")
+                                loadingSlots.remove(index)
+                                logger.debug("✨ CLEANUP: Cleared loading state for index \(index)")
+                            }
+                        } else {
+                            withAnimation(.spring()) {
+                                swipeOffset = 0
+                                swipeOpacity = 1.0
+                            }
+                        }
+                        isSwipeInProgress = false
+                        swipingVideoId = nil
+                    }
+                }
+        )
+        .onTapGesture {
+            if !isSwipeInProgress && !isSwipingGap && !isLoading {
+                Task {
+                    await navigateToVideo(at: index)
+                }
+            }
+        }
     }
     
     private func fallbackVideoImage(video: Video, width: CGFloat, height: CGFloat) -> some View {

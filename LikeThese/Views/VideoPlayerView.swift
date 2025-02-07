@@ -22,21 +22,25 @@ struct VideoPlayerView: View {
                     Task {
                         do {
                             let playerItem = try await videoCacheService.preloadVideo(url: url)
-                            await MainActor.run {
-                                if let player = videoManager.player(for: index) as AVPlayer? {
-                                    if let currentItem = player.currentItem {
-                                        if currentItem.status == .failed {
-                                            player.replaceCurrentItem(with: playerItem)
-                                            player.play()
-                                            logger.debug("✅ VIDEO PLAYER: Recovered failed playback for index \(index)")
-                                        } else {
-                                            logger.debug("ℹ️ VIDEO PLAYER: Player already has working item for index \(index)")
-                                        }
-                                    } else {
-                                        player.replaceCurrentItem(with: playerItem)
-                                        player.play()
-                                        logger.debug("✅ VIDEO PLAYER: Started new playback for index \(index)")
+                            
+                            // Verify player readiness
+                            try await withTimeout(seconds: 5.0) {
+                                while true {
+                                    if let player = videoManager.player(for: index),
+                                       let currentItem = player.currentItem,
+                                       currentItem.status == .readyToPlay,
+                                       currentItem.isPlaybackLikelyToKeepUp {
+                                        return
                                     }
+                                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+                                }
+                            }
+                            
+                            await MainActor.run {
+                                if let player = videoManager.player(for: index) {
+                                    player.replaceCurrentItem(with: playerItem)
+                                    player.play()
+                                    logger.debug("✅ VIDEO PLAYER: Started playback for index \(index)")
                                 } else {
                                     logger.error("❌ VIDEO PLAYER: No player available for index \(index)")
                                 }
@@ -65,6 +69,27 @@ struct VideoPlayerView: View {
             }
         }
     }
+    
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw VideoPlayerError.timeout
+            }
+            
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+    }
+}
+
+enum VideoPlayerError: Error {
+    case timeout
 }
 
 #if DEBUG

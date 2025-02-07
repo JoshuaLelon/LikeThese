@@ -13,12 +13,16 @@ class VideoViewModel: ObservableObject {
     @Published var error: Error?
     @Published var replacingVideoId: String?
     @Published private var loadingVideoIds: Set<String> = []
-    private let firestoreService = FirestoreService.shared
+    private let firestoreService: FirestoreService
     private let pageSize = 4 // Only load 4 at a time
     private var videoSequence: [Int: Video] = [:] // Track video sequence
     
+    init(firestoreService: FirestoreService = FirestoreService.shared) {
+        self.firestoreService = firestoreService
+    }
+    
     func isLoadingVideo(_ videoId: String) -> Bool {
-        return loadingVideoIds.contains(videoId)
+        return replacingVideoId == videoId
     }
     
     func setLoadingState(for videoId: String, isLoading: Bool) {
@@ -119,6 +123,7 @@ class VideoViewModel: ObservableObject {
     func removeVideo(_ videoId: String) async {
         if let index = videos.firstIndex(where: { $0.id == videoId }) {
             do {
+                // Set loading state
                 replacingVideoId = videoId
                 
                 // Fetch new video first
@@ -128,10 +133,6 @@ class VideoViewModel: ObservableObject {
                 var updatedVideos = videos
                 updatedVideos.remove(at: index)
                 updatedVideos.insert(newVideo, at: index)
-                
-                // Update sequence
-                videoSequence[index] = newVideo
-                
                 videos = updatedVideos
                 replacingVideoId = nil
             } catch {

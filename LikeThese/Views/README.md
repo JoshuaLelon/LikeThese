@@ -27,4 +27,38 @@ This implementation ensures:
 - No flickering during transitions
 - No offset issues with video positioning
 - Smooth gesture-based navigation
-- Proper video scaling and aspect ratio handling 
+- Proper video scaling and aspect ratio handling
+
+## Grid Layout Implementation
+
+### InspirationsGridView
+The grid layout has been optimized for a 2x2 video display with the following features:
+
+- Responsive sizing based on screen dimensions
+- Maintains 9:16 video aspect ratio
+- 36pt spacing between videos for clear visual separation and touch targets
+- 1pt padding around grid edges
+- Dynamic height calculation based on available width
+- Smooth animations during video transitions
+
+### Key Implementation Details
+- Uses LazyVGrid for efficient video rendering
+- GeometryReader for responsive calculations
+- Preserves video aspect ratios without stretching
+- Optimized for different screen sizes
+- Wide spacing (36pt) to improve visual hierarchy and touch interaction
+
+### Grid Layout Flow
+1. Screen width determines video dimensions
+2. Videos maintain 9:16 aspect ratio
+3. 36pt gaps provide clear visual separation and touch targets
+4. 1pt edge padding prevents overflow
+5. Smooth animations during video removal/replacement
+
+This implementation ensures:
+- Consistent video appearance across devices
+- No stretching or distortion of videos
+- Clear visual separation between videos
+- Comfortable touch targets for gestures
+- Efficient use of screen space
+- Smooth transitions during interactions

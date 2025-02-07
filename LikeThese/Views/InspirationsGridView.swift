@@ -22,6 +22,36 @@ struct InspirationsGridView: View {
     
     @State private var preloadingIndex: Int?
     
+    // Add new properties for layout
+    @State private var gridSpacing: CGFloat = 36 // Wider gap between videos (was 28)
+    @State private var gridPadding: CGFloat = 1 // Minimal padding around grid edges
+    
+    // Add new properties for touch targets
+    @State private var touchTargetSize: CGFloat = 44 // Standard iOS touch target size
+    @State private var isSwipingGap = false
+    @State private var swipingGapLocation: GapLocation?
+    
+    // Add new properties for multi-swipe
+    @State private var swipingVideos: Set<String> = []
+    @State private var multiSwipeOffset: CGFloat = 0
+    private let twoVideoSwipeThreshold: CGFloat = 0.35 // 35% threshold
+    private let fourVideoSwipeThreshold: CGFloat = 0.40 // 40% threshold
+    
+    // Add new properties for video replacement
+    @State private var loadingSlots: Set<Int> = []
+    @State private var preloadingThumbnails: Set<Int> = []
+    
+    // Add new properties for visual feedback
+    @State private var swipeOpacity: CGFloat = 1.0
+    @State private var multiSwipeOpacity: CGFloat = 1.0
+    private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
+    
+    private enum GapLocation: Equatable {
+        case horizontal(Int) // Index of left video
+        case vertical(Int)   // Index of top video
+        case center         // Center point where all four videos meet
+    }
+    
     @MainActor
     init(videoManager: VideoManager = VideoManager.shared) {
         self.videoManager = videoManager
@@ -31,6 +61,15 @@ struct InspirationsGridView: View {
         GridItem(.flexible(), spacing: 0),
         GridItem(.flexible(), spacing: 0)
     ]
+    
+    private func calculateVideoHeight(for width: CGFloat) -> CGFloat {
+        // Calculate height maintaining 9:16 aspect ratio
+        // Account for spacing and padding
+        let availableWidth = (width - gridPadding * 2 - gridSpacing) / 2
+        let height = availableWidth * (16/9)
+        logger.debug("📐 GRID: Calculated video height \(height) for width \(width)")
+        return height
+    }
     
     var body: some View {
         NavigationStack {
@@ -46,10 +85,102 @@ struct InspirationsGridView: View {
                         }
                     }
                 } else {
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: 0) {
-                            ForEach(Array(gridVideos.enumerated()), id: \.element.id) { index, video in
-                                gridItem(video: video, index: index)
+                    GeometryReader { geometry in
+                        let videoHeight = calculateVideoHeight(for: geometry.size.width)
+                        ScrollView {
+                            ZStack {
+                                // Videos Grid
+                                LazyVGrid(
+                                    columns: [
+                                        GridItem(.flexible(), spacing: gridSpacing),
+                                        GridItem(.flexible(), spacing: gridSpacing)
+                                    ],
+                                    spacing: gridSpacing
+                                ) {
+                                    ForEach(Array(gridVideos.enumerated()), id: \.element.id) { index, video in
+                                        gridItem(video: video, index: index)
+                                            .frame(height: videoHeight)
+                                    }
+                                }
+                                .padding(gridPadding)
+                                
+                                // Touch Target Areas
+                                if gridVideos.count >= 4 {
+                                    // Vertical gap between left videos
+                                    Rectangle()
+                                        .fill(Color.clear)
+                                        .frame(width: touchTargetSize, height: videoHeight * 2 + gridSpacing)
+                                        .position(x: geometry.size.width / 4, y: videoHeight + gridSpacing / 2)
+                                        .gesture(
+                                            DragGesture()
+                                                .onChanged { value in
+                                                    handleGapDragChange(value, at: .vertical(0))
+                                                }
+                                                .onEnded { value in
+                                                    handleGapDragEnd(value)
+                                                }
+                                        )
+                                    
+                                    // Vertical gap between right videos
+                                    Rectangle()
+                                        .fill(Color.clear)
+                                        .frame(width: touchTargetSize, height: videoHeight * 2 + gridSpacing)
+                                        .position(x: geometry.size.width * 3/4, y: videoHeight + gridSpacing / 2)
+                                        .gesture(
+                                            DragGesture()
+                                                .onChanged { value in
+                                                    handleGapDragChange(value, at: .vertical(1))
+                                                }
+                                                .onEnded { value in
+                                                    handleGapDragEnd(value)
+                                                }
+                                        )
+                                    
+                                    // Horizontal gap between top videos
+                                    Rectangle()
+                                        .fill(Color.clear)
+                                        .frame(width: geometry.size.width, height: touchTargetSize)
+                                        .position(x: geometry.size.width / 2, y: videoHeight / 2)
+                                        .gesture(
+                                            DragGesture()
+                                                .onChanged { value in
+                                                    handleGapDragChange(value, at: .horizontal(0))
+                                                }
+                                                .onEnded { value in
+                                                    handleGapDragEnd(value)
+                                                }
+                                        )
+                                    
+                                    // Horizontal gap between bottom videos
+                                    Rectangle()
+                                        .fill(Color.clear)
+                                        .frame(width: geometry.size.width, height: touchTargetSize)
+                                        .position(x: geometry.size.width / 2, y: videoHeight * 1.5 + gridSpacing)
+                                        .gesture(
+                                            DragGesture()
+                                                .onChanged { value in
+                                                    handleGapDragChange(value, at: .horizontal(2))
+                                                }
+                                                .onEnded { value in
+                                                    handleGapDragEnd(value)
+                                                }
+                                        )
+                                    
+                                    // Center intersection point
+                                    Rectangle()
+                                        .fill(Color.clear)
+                                        .frame(width: touchTargetSize, height: touchTargetSize)
+                                        .position(x: geometry.size.width / 2, y: videoHeight + gridSpacing / 2)
+                                        .gesture(
+                                            DragGesture()
+                                                .onChanged { value in
+                                                    handleGapDragChange(value, at: .center)
+                                                }
+                                                .onEnded { value in
+                                                    handleGapDragEnd(value)
+                                                }
+                                        )
+                                }
                             }
                         }
                     }
@@ -103,20 +234,38 @@ struct InspirationsGridView: View {
     
     private func gridItem(video: Video, index: Int) -> some View {
         let isReplacing = video.id == viewModel.replacingVideoId
-        let isLoading = isReplacing || viewModel.isLoadingVideo(video.id)
+        let isLoading = isReplacing || viewModel.isLoadingVideo(video.id) || loadingSlots.contains(index)
+        let isPreloadingThumbnail = preloadingThumbnails.contains(index)
         let isBeingDragged = video.id == swipingVideoId
+        let isPartOfMultiSwipe = swipingVideos.contains(video.id)
+        
+        if isLoading {
+            logger.debug("⏳ GRID ITEM: Loading state for video \(video.id) at index \(index)")
+        }
+        if isPreloadingThumbnail {
+            logger.debug("🔄 GRID ITEM: Preloading thumbnail for video \(video.id) at index \(index)")
+        }
         
         return AsyncImage(url: video.thumbnailUrl.flatMap { URL(string: $0) }) { phase in
             ZStack {
                 switch phase {
                 case .empty:
-                    LoadingView(message: "Loading thumbnail...")
+                    LoadingView(message: isPreloadingThumbnail ? "Preloading..." : "Loading thumbnail...")
+                    .onAppear {
+                        logger.debug("⏳ THUMBNAIL: Started loading for video \(video.id)")
+                    }
                 case .success(let image):
                     image
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
+                        .aspectRatio(9/16, contentMode: .fill)
+                        .onAppear {
+                            logger.debug("✅ THUMBNAIL: Successfully loaded for video \(video.id)")
+                        }
                 case .failure:
                     LoadingView(message: "Failed to load", isError: true)
+                        .onAppear {
+                            logger.error("❌ THUMBNAIL: Failed to load for video \(video.id)")
+                        }
                 @unknown default:
                     LoadingView(message: "Loading...")
                 }
@@ -126,41 +275,62 @@ struct InspirationsGridView: View {
                     VStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(1.5)
-                        Text(isReplacing ? "Replacing video..." : "Loading...")
+                        Text(isReplacing ? "Replacing video..." : 
+                             (isPreloadingThumbnail ? "Preloading..." : "Loading..."))
                             .foregroundColor(.white)
                             .font(.caption)
                     }
                 }
             }
-            .frame(height: 300)
             .clipped()
             .contentShape(Rectangle())
-            .offset(y: isBeingDragged ? swipeOffset : 0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: swipeOffset)
+            .opacity(isPartOfMultiSwipe ? multiSwipeOpacity : (isBeingDragged ? swipeOpacity : 1.0))
+            .offset(y: isBeingDragged ? swipeOffset : (isPartOfMultiSwipe ? multiSwipeOffset : 0))
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isBeingDragged ? swipeOffset : multiSwipeOffset)
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        isSwipeInProgress = true
-                        swipingVideoId = video.id
-                        swipeOffset = value.translation.height
-                    }
-                    .onEnded { value in
-                        let threshold: CGFloat = -90 // 30% of 300px height
-                        if value.translation.height < threshold {
-                            Task {
-                                await viewModel.removeVideo(video.id)
-                            }
-                        } else {
-                            withAnimation(.spring()) {
-                                swipeOffset = 0
+                        if !isSwipingGap && !isLoading {
+                            isSwipeInProgress = true
+                            swipingVideoId = video.id
+                            swipeOffset = value.translation.height
+                            logger.debug("🔄 SWIPE: Single video swipe in progress - Video: \(video.id), Offset: \(value.translation.height)")
+                            
+                            // Update opacity based on swipe progress
+                            withAnimation(.easeInOut(duration: 0.1)) {
+                                swipeOpacity = calculateOpacity(for: value.translation.height, threshold: 0.3)
                             }
                         }
-                        isSwipeInProgress = false
-                        swipingVideoId = nil
+                    }
+                    .onEnded { value in
+                        if !isSwipingGap && !isLoading {
+                            let threshold: CGFloat = -90 // 30% of 300px height
+                            if value.translation.height < threshold {
+                                logger.debug("🗑️ SWIPE: Removing single video \(video.id) after successful swipe")
+                                triggerHapticFeedback()
+                                
+                                Task {
+                                    loadingSlots.insert(index)
+                                    logger.debug("⏳ LOADING: Started loading state for index \(index)")
+                                    await viewModel.removeVideo(video.id)
+                                    logger.debug("✅ REMOVAL: Completed removal of video \(video.id)")
+                                    loadingSlots.remove(index)
+                                    logger.debug("✨ CLEANUP: Cleared loading state for index \(index)")
+                                }
+                            } else {
+                                logger.debug("↩️ SWIPE: Cancelled swipe for video \(video.id)")
+                                withAnimation(.spring()) {
+                                    swipeOffset = 0
+                                    swipeOpacity = 1.0
+                                }
+                            }
+                            isSwipeInProgress = false
+                            swipingVideoId = nil
+                        }
                     }
             )
             .onTapGesture {
-                if !isSwipeInProgress {
+                if !isSwipeInProgress && !isSwipingGap && !isLoading {
                     Task {
                         await navigateToVideo(at: index)
                     }
@@ -267,6 +437,118 @@ struct InspirationsGridView: View {
             group.cancelAll()
             return result
         }
+    }
+    
+    private func calculateOpacity(for translation: CGFloat, threshold: CGFloat) -> CGFloat {
+        let progress = min(abs(translation) / (threshold * UIScreen.main.bounds.height), 1.0)
+        let opacity = 1.0 - (progress * 0.5)
+        logger.debug("🎨 OPACITY: Calculated opacity \(opacity) for translation \(translation)")
+        return opacity
+    }
+    
+    private func triggerHapticFeedback() {
+        feedbackGenerator.prepare()
+        feedbackGenerator.impactOccurred()
+        logger.debug("📳 HAPTIC: Triggered feedback")
+    }
+    
+    private func handleGapDragChange(_ value: DragGesture.Value, at location: GapLocation) {
+        isSwipingGap = true
+        swipingGapLocation = location
+        multiSwipeOffset = value.translation.height
+        
+        // Log swipe progress
+        let locationDesc = switch location {
+            case .horizontal(let index): "horizontal gap at index \(index)"
+            case .vertical(let index): "vertical gap at index \(index)"
+            case .center: "center gap"
+        }
+        logger.debug("🔄 SWIPE: Multi-swipe in progress - Location: \(locationDesc), Offset: \(value.translation.height)")
+        
+        // Update opacity based on swipe progress
+        let threshold = location == .center ? fourVideoSwipeThreshold : twoVideoSwipeThreshold
+        withAnimation(.easeInOut(duration: 0.1)) {
+            multiSwipeOpacity = calculateOpacity(for: value.translation.height, threshold: threshold)
+        }
+        
+        // Determine affected videos based on gap location
+        switch location {
+        case .horizontal(let index):
+            // For horizontal gaps, affect videos on both sides
+            if index < gridVideos.count {
+                swipingVideos = [gridVideos[index].id]
+                if index + 1 < gridVideos.count {
+                    swipingVideos.insert(gridVideos[index + 1].id)
+                }
+                logger.debug("👆 SWIPE: Affecting horizontal videos at indices \(index) and \(index + 1)")
+            }
+        case .vertical(let index):
+            // For vertical gaps, affect videos above and below
+            if index < gridVideos.count {
+                swipingVideos = [gridVideos[index].id]
+                if index + 2 < gridVideos.count {
+                    swipingVideos.insert(gridVideos[index + 2].id)
+                }
+                logger.debug("👆 SWIPE: Affecting vertical videos at indices \(index) and \(index + 2)")
+            }
+        case .center:
+            // For center point, affect all four videos
+            swipingVideos = Set(gridVideos.prefix(4).map { $0.id })
+            logger.debug("👆 SWIPE: Affecting all four videos in grid")
+        }
+    }
+    
+    private func handleGapDragEnd(_ value: DragGesture.Value) {
+        let threshold = swipingGapLocation == .center ? 
+            fourVideoSwipeThreshold : twoVideoSwipeThreshold
+        let swipeDistance = abs(value.translation.height)
+        let screenHeight = UIScreen.main.bounds.height
+        let swipePercentage = swipeDistance / screenHeight
+        
+        logger.debug("🔄 SWIPE: Multi-swipe ended - Distance: \(swipeDistance), Percentage: \(swipePercentage * 100)%")
+        
+        if swipePercentage >= threshold && value.translation.height < 0 {
+            // Trigger haptic feedback
+            triggerHapticFeedback()
+            logger.debug("📳 FEEDBACK: Triggered haptic for successful multi-swipe")
+            
+            // Remove affected videos sequentially
+            Task {
+                // Convert to array to maintain order
+                let videoIds = Array(swipingVideos)
+                logger.debug("🗑️ REMOVAL: Starting sequential removal of \(videoIds.count) videos")
+                
+                for (index, videoId) in videoIds.enumerated() {
+                    if let gridIndex = gridVideos.firstIndex(where: { $0.id == videoId }) {
+                        loadingSlots.insert(gridIndex)
+                        logger.debug("⏳ LOADING: Started loading state for index \(gridIndex)")
+                        
+                        await viewModel.removeVideo(videoId)
+                        logger.debug("✅ REMOVAL: Removed video at index \(gridIndex)")
+                        
+                        // Start preloading thumbnail for next video
+                        if index + 1 < videoIds.count,
+                           let nextIndex = gridVideos.firstIndex(where: { $0.id == videoIds[index + 1] }) {
+                            preloadingThumbnails.insert(nextIndex)
+                            logger.debug("🔄 PRELOAD: Started preloading thumbnail for next video at index \(nextIndex)")
+                        }
+                    }
+                }
+                loadingSlots.removeAll()
+                preloadingThumbnails.removeAll()
+                logger.debug("✨ CLEANUP: Cleared all loading states and preloading flags")
+            }
+        }
+        
+        // Reset state with animation
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            multiSwipeOffset = 0
+            multiSwipeOpacity = 1.0
+        }
+        isSwipingGap = false
+        swipingGapLocation = nil
+        swipingVideos.removeAll()
+        logger.debug("🔄 RESET: Cleared multi-swipe state")
     }
 }
 

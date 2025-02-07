@@ -1,7 +1,39 @@
 ## Phase 10: Multiswipe: Quick Video Removal Features
 
 ### Checklist
-[ ] **Basic Swipe-to-Remove**: Add the ability for users to swipe up on any video in the grid to instantly remove it from view (like swiping emails in a mail app).
+[x] **Basic Swipe-to-Remove**: Add the ability for users to swipe up on any video in the grid to instantly remove it from view (like swiping emails in a mail app).
+
+[x] **Grid Layout Spacing**
+    - Add optimal spacing between videos in 2x2 grid that:
+        - [x] Maintains correct video aspect ratios (no stretching/squishing)
+        - [x] Scales appropriately with screen size
+        - [x] Eliminates excess space around grid edges
+        - [x] Provides sufficient touch targets between videos
+
+[x] **Multi-Video Swipe Gestures**
+    - Two-Video Swipe:
+        - [x] Detect swipe up gesture in space between any two adjacent videos
+        - [x] Implement 35% swipe distance threshold
+        - [x] Remove only the two videos touching the swiped space
+        - [x] Synchronize upward animation for both affected videos
+    - Four-Video Center Swipe:
+        - [x] Detect swipe up gesture in center space where all four videos meet
+        - [x] Implement 40% swipe distance threshold
+        - [x] Remove all four videos simultaneously
+        - [x] Synchronize upward animation for all videos
+
+[x] **Video Replacement System**
+    - Sequential Video Loading:
+        - [x] Fetch and load new videos one at a time
+        - [x] Show loading state for each empty slot
+        - [x] Preload thumbnails when possible
+        - [x] Maintain grid stability during replacements
+
+[x] **Visual Feedback**
+    - [x] Add opacity changes during swipe gestures
+    - [x] Implement smooth upward animations matching existing style
+    - [x] Add haptic feedback on successful removals
+    - [x] Show loading indicators during video replacements
 
 ### Implementation Issues and Solutions
 

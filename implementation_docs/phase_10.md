@@ -1,7 +1,166 @@
 ## Phase 10: Multiswipe: Quick Video Removal Features
 
 ### Checklist
-[ ] **Basic Swipe-to-Remove**: Add the ability for users to swipe left or right on any video in the grid to instantly remove it from view (like swiping emails in a mail app).
+[ ] **Basic Swipe-to-Remove**: Add the ability for users to swipe up on any video in the grid to instantly remove it from view (like swiping emails in a mail app).
+
+### Implementation Issues and Solutions
+
+#### Issue 1: Array Index Mismatch
+**Problem**: When removing a video and fetching a replacement, the new video is being appended to the end of the array instead of being inserted at the position of the removed video. This causes the grid layout to become inconsistent.
+
+**Relevant Logs**:
+```
+🗑️ Removing video with upward swipe - Video ID: yellow_hoodie_on_stool
+total videos: 4
+total videos: 3
+total videos: 4
+```
+
+**Solution Plan**:
+1. Store the removal index when removing a video
+2. Insert the replacement video at the same index
+3. Maintain grid position consistency
+
+**Code Changes**:
+Before:
+```swift
+// In VideoViewModel
+func removeVideo(_ videoId: String) async {
+    if let index = videos.firstIndex(where: { $0.id == videoId }) {
+        videos.remove(at: index)
+        
+        // Load a replacement video
+        do {
+            let newVideo = try await firestoreService.fetchRandomVideo()
+            videos.append(newVideo)  // Wrong: Appending to end
+        } catch {
+            self.error = error
+        }
+    }
+}
+```
+
+After:
+```swift
+// In VideoViewModel
+func removeVideo(_ videoId: String) async {
+    if let index = videos.firstIndex(where: { $0.id == videoId }) {
+        videos.remove(at: index)
+        
+        // Load a replacement video
+        do {
+            let newVideo = try await firestoreService.fetchRandomVideo()
+            videos.insert(newVideo, at: index)  // Correct: Insert at same position
+        } catch {
+            self.error = error
+        }
+    }
+}
+```
+
+#### Issue 2: Grid Update Timing
+**Problem**: The grid's state (`gridVideos`) isn't being updated when the videos array changes in the ViewModel, causing the grid to show stale data.
+
+**Solution Plan**:
+1. Add a publisher in the ViewModel to notify of video array changes
+2. Update the grid's state when the videos array changes
+3. Ensure smooth animations during updates
+
+**Code Changes**:
+Before:
+```swift
+// In InspirationsGridView
+@State private var gridVideos: [Video] = []
+
+// One-time initialization
+.task {
+    await viewModel.loadInitialVideos()
+    gridVideos = viewModel.videos
+}
+```
+
+After:
+```swift
+// In InspirationsGridView
+@State private var gridVideos: [Video] = []
+
+// Add video array observation
+.onChange(of: viewModel.videos) { newVideos in
+    withAnimation(.spring()) {
+        gridVideos = newVideos
+    }
+}
+```
+
+**Expected Outcome**: These changes will ensure that:
+1. Videos maintain their correct positions in the grid when removed and replaced
+2. The grid updates smoothly when videos change
+3. The user experience remains consistent during video removal and replacement
+
+#### Issue 3: Grid Animation and State Management
+**Problem**: The grid's state wasn't being properly updated when videos were removed and replaced, causing visual inconsistencies.
+
+**Relevant Logs**:
+```
+🔄 Swipe in progress - Video ID: yellow_hoodie_on_stool, Offset: -45.0
+🗑️ Removing video with upward swipe - Video ID: yellow_hoodie_on_stool
+🔄 Grid updated with 4 videos
+```
+
+**Solution Plan**:
+1. Add local grid state management
+2. Implement proper animation timing
+3. Handle state cleanup after removal
+
+**Code Changes**:
+```swift
+// In InspirationsGridView
+@State private var gridVideos: [Video] = []
+
+// Add video array observation
+.onChange(of: viewModel.videos) { newVideos in
+    withAnimation(.spring()) {
+        gridVideos = newVideos
+    }
+}
+```
+
+**Expected Outcome**: 
+1. Smooth animations during video removal
+2. Consistent grid state
+3. Proper cleanup of removal states
+
+#### Issue 4: Gesture Conflict Resolution
+**Problem**: Swipe gestures were conflicting with tap gestures, causing unintended navigation.
+
+**Solution Plan**:
+1. Track swipe gesture state
+2. Only allow taps when no swipe is in progress
+3. Use simultaneous gesture recognition
+
+**Code Changes**:
+```swift
+// In InspirationsGridView
+@State private var isSwipeInProgress = false
+
+.simultaneousGesture(
+    DragGesture()
+        .onChanged { value in
+            isSwipeInProgress = true
+            // ... gesture handling
+        }
+)
+.onTapGesture {
+    if !isSwipeInProgress {
+        // ... handle tap
+    }
+}
+```
+
+**Expected Outcome**:
+1. Clear separation between swipe and tap gestures
+2. No unintended navigation during swipes
+3. Improved user experience
 
 [ ] **Space-Based Multi-Remove**:
    - Add small gaps between videos in the grid

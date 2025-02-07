@@ -1,6 +1,7 @@
 import Foundation
 import os
 import FirebaseFirestore
+import SwiftUI
 
 private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoViewModel")
 
@@ -56,5 +57,40 @@ class VideoViewModel: ObservableObject {
     func appendAutoplayVideo(_ video: Video) {
         logger.debug("📥 Appending autoplay video: \(video.id)")
         videos.append(video)
+    }
+    
+    // Add video removal functionality
+    func removeVideo(_ videoId: String) async {
+        logger.debug("🗑️ Removing video: \(videoId)")
+        
+        // Find and remove the video
+        if let index = videos.firstIndex(where: { $0.id == videoId }) {
+            // Remove the video first
+            videos.remove(at: index)
+            logger.debug("✅ Removed video at index \(index)")
+            
+            // Load a replacement video
+            do {
+                // Start loading the replacement immediately
+                let newVideoTask = Task { try await firestoreService.fetchRandomVideo() }
+                
+                // Give time for removal animation
+                try await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                
+                // Get the new video
+                let newVideo = try await newVideoTask.value
+                logger.debug("✅ Loaded replacement video: \(newVideo.id)")
+                
+                // Insert with animation
+                await MainActor.run {
+                    withAnimation(.spring()) {
+                        videos.insert(newVideo, at: index)
+                    }
+                }
+            } catch {
+                logger.error("❌ Error loading replacement video: \(error.localizedDescription)")
+                self.error = error
+            }
+        }
     }
 } 

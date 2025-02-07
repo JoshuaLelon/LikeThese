@@ -13,6 +13,12 @@ struct InspirationsGridView: View {
     @State private var showError = false
     @State private var errorMessage: String?
     
+    // Gesture state tracking
+    @State private var isSwipeInProgress = false
+    @State private var swipingVideoId: String?
+    @State private var swipeOffset: CGFloat = 0
+    @State private var removingVideoId: String?
+    
     @MainActor
     init(videoManager: VideoManager = VideoManager.shared) {
         self.videoManager = videoManager
@@ -58,77 +64,87 @@ struct InspirationsGridView: View {
         }
         .task {
             await viewModel.loadInitialVideos()
-            // Use all videos instead of just first 4
             gridVideos = viewModel.videos
             logger.info("📱 Grid initialized with \(gridVideos.count) videos")
+        }
+        .onChange(of: viewModel.videos) { newVideos in
+            withAnimation(.spring()) {
+                gridVideos = newVideos
+                logger.info("🔄 Grid updated with \(gridVideos.count) videos")
+            }
         }
     }
     
     private var gridContent: some View {
-        GeometryReader { geometry in
-            let availableWidth = geometry.size.width
-            let itemWidth = availableWidth / 2
-            let itemHeight = itemWidth * 16/9
-            
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 0) {
-                    ForEach(Array(gridVideos.enumerated()), id: \.element.id) { index, video in
-                        gridItem(for: video, index: index, width: itemWidth, height: itemHeight)
-                    }
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 0) {
+                ForEach(Array(gridVideos.enumerated()), id: \.element.id) { index, video in
+                    gridItem(video: video, index: index)
                 }
             }
         }
-        .ignoresSafeArea()
     }
     
-    private func gridItem(for video: Video, index: Int, width: CGFloat, height: CGFloat) -> some View {
-        Button {
-            logger.info("👆 Grid selection - Video ID: \(video.id), Index: \(index), Grid Position: \(index % 2),\(index / 2)")
-            selectedVideo = video
-            selectedIndex = index
-            
-            // Ensure video is ready for playback
-            Task {
-                await preloadAndNavigate(to: index)
+    private func gridItem(video: Video, index: Int) -> some View {
+        let isRemoving = video.id == removingVideoId
+        let isBeingDragged = video.id == swipingVideoId
+        
+        return AsyncImage(url: video.thumbnailUrl.flatMap { URL(string: $0) }) { phase in
+            Group {
+                switch phase {
+                case .empty:
+                    ProgressView()
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                case .failure:
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(.red)
+                @unknown default:
+                    EmptyView()
+                }
             }
-        } label: {
-            if let thumbnailUrl = video.thumbnailUrl, let url = URL(string: thumbnailUrl) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        ZStack {
-                            Color.black
-                            ProgressView()
-                                .tint(.white)
+            .frame(height: 300)
+            .clipped()
+            .opacity(isRemoving ? 0 : 1)
+            .offset(y: isBeingDragged ? swipeOffset : 0)
+            .simultaneousGesture(
+                DragGesture()
+                    .onChanged { value in
+                        isSwipeInProgress = true
+                        swipingVideoId = video.id
+                        swipeOffset = value.translation.height
+                        logger.info("🔄 Swipe in progress - Video ID: \(video.id), Offset: \(swipeOffset)")
+                    }
+                    .onEnded { value in
+                        let threshold: CGFloat = -90 // 30% of 300px height
+                        if value.translation.height < threshold {
+                            logger.info("🗑️ Removing video with upward swipe - Video ID: \(video.id)")
+                            withAnimation(.spring()) {
+                                removingVideoId = video.id
+                            }
+                            Task {
+                                await viewModel.removeVideo(video.id)
+                            }
+                        } else {
+                            logger.info("↩️ Cancelling swipe - Video ID: \(video.id)")
+                            withAnimation(.spring()) {
+                                swipeOffset = 0
+                            }
                         }
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(9/16, contentMode: .fill)
-                            .frame(width: width, height: height)
-                            .clipped()
-                    case .failure:
-                        fallbackVideoImage(video: video, width: width, height: height)
-                    @unknown default:
-                        EmptyView()
+                        isSwipeInProgress = false
+                        swipingVideoId = nil
+                    }
+            )
+            .onTapGesture {
+                if !isSwipeInProgress {
+                    logger.info("👆 Grid selection - Video ID: \(video.id), Index: \(index), Grid Position: \(index/2),\(index%2)")
+                    Task {
+                        await preloadAndNavigate(to: index)
                     }
                 }
-            } else {
-                fallbackVideoImage(video: video, width: width, height: height)
             }
-        }
-        .buttonStyle(.plain)
-        .frame(width: width, height: height)
-        .background(Color.black)
-        .onAppear {
-            logger.info("📱 Grid item appeared - Video ID: \(video.id), Index: \(index)")
-        }
-        .alert("Video Error", isPresented: $showError) {
-            Button("OK", role: .cancel) {
-                showError = false
-            }
-        } message: {
-            Text(errorMessage ?? "Failed to load video")
         }
     }
     

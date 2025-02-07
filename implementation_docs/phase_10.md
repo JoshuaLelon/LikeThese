@@ -1048,3 +1048,112 @@ Results show:
 - Consistent grid state maintenance
 - Improved user experience with easier swipe gestures
 - Better error recovery and state management
+
+### Swipe Issue Documentation (2024-03-21)
+
+#### Original Code
+The original swipe implementation in `VideoPlaybackView.swift` was simpler and more direct:
+
+```swift
+private func handleSwipeUp() {
+    if let index = currentIndex,
+       index + 1 < videos.count {
+        videoManager.prepareForPlayback(at: index + 1)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            offset = -UIScreen.main.bounds.height
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            currentIndex = index + 1
+            offset = 0
+            videoManager.startPlaying(at: index + 1)
+        }
+    }
+}
+```
+
+#### Problem Description
+The original implementation had several issues:
+1. Race conditions between video transitions
+2. Videos would sometimes show black screens during transitions
+3. No proper state management during transitions
+4. Preloading wasn't guaranteed before transitions
+5. Animations weren't properly synchronized with video playback
+
+#### Changes Made
+The new implementation:
+1. Added explicit transition state management through `TransitionState` enum
+2. Implemented proper preloading checks before transitions
+3. Added coordinated animation sequences using `Task` and `MainActor`
+4. Introduced opacity transitions alongside position animations
+5. Added more robust error handling and logging
+6. Implemented a state machine for transition management in `VideoManager`
+
+Key changes in the code:
+```swift
+private func handleSwipeUp() {
+    guard let current = currentIndex,
+          current + 1 < videos.count,
+          let nextVideo = videos[safe: current + 1],
+          let nextUrl = URL(string: nextVideo.url) else {
+        return
+    }
+    
+    Task {
+        do {
+            // Preload next video if not already loaded
+            if videoManager.preloadStates[current + 1] == nil {
+                try await videoManager.preloadVideo(url: nextUrl, forIndex: current + 1)
+            }
+            
+            // Begin gesture transition with proper state handling
+            videoManager.beginTransition(.gesture(from: current, to: current + 1)) {
+                Task { @MainActor in
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        transitionState = .transitioning(from: current, to: current + 1)
+                        transitionOpacity = 0
+                        incomingOffset = UIScreen.main.bounds.height
+                    }
+                    
+                    // Start playing next video immediately
+                    videoManager.startPlaying(at: current + 1)
+                    
+                    // Reset transition state after animation
+                    try? await Task.sleep(nanoseconds: UInt64(0.3 * Double(NSEC_PER_SEC)))
+                    transitionState = .none
+                    transitionOpacity = 1
+                    incomingOffset = 0
+                    offset = 0
+                    isGestureActive = false
+                }
+            }
+        } catch {
+            logger.error("❌ Failed to handle swipe up: \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+    }
+}
+```
+
+#### Expected Fix
+These changes were expected to:
+1. Eliminate black screens by ensuring videos were preloaded
+2. Provide smoother transitions with synchronized animations
+3. Prevent race conditions through proper state management
+4. Handle edge cases and errors more gracefully
+5. Improve the user experience with better visual feedback
+
+#### Actual Result
+The changes unexpectedly broke the swipe functionality entirely. This suggests that:
+1. The new state management system may be too rigid
+2. There could be a timing issue with the transition state changes
+3. The gesture recognition system might be conflicting with the new animation system
+4. The coordination between `VideoManager` and `VideoPlaybackView` state machines may be causing deadlocks
+
+Next steps for investigation:
+1. Verify gesture recognition is still working by adding debug logs
+2. Check if transition states are being set and cleared properly
+3. Investigate potential deadlocks in state management
+4. Consider simplifying the state machine while maintaining the benefits of preloading
+5. Add more detailed logging around gesture handling and state transitions

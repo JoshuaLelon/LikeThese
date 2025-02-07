@@ -7,10 +7,10 @@ Below is a single, expanded, and detailed checklist that merges both the feature
 ---
 
 #### 1. Continuous Availability of Videos
-- [x] Increase the backend fetch limit so there are always more than 4 videos available:
-  - [x] Implement dynamic fetching to trigger whenever a video is removed from the grid (prefetch a new one if fewer than a threshold remain).
-  - [x] Maintain an in-memory buffer of extra videos to avoid empty slots or stalling gestures.
-  - [x] Expand the server-side pool or replicate existing videos for testing.  
+- [ ] Increase the backend fetch limit so there are always more than 4 videos available:
+  - [ ] Implement dynamic fetching to trigger whenever a video is removed from the grid (prefetch a new one if fewer than a threshold remain).
+  - [ ] Maintain an in-memory buffer of extra videos to avoid empty slots or stalling gestures.
+  - [ ] Expand the server-side pool or replicate existing videos for testing.  
     - **Notes**: If a fetch error occurs, revert the removal or show an error item, never leave a blank cell.
 
 #### 2. Grid Stability and Video Replacement

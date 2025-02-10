@@ -1,0 +1,7 @@
+---
+description: interpreting linter errors when adding or editing swift files
+globs: *.swift
+---
+your tooling for linting is not set up correctly yet:
+- ignore all hypeloop import linter errors
+- this is an ios project, so ignore "unavailable in macOS" linter errors

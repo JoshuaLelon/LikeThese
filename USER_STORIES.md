@@ -6,7 +6,7 @@
 "As a user, I want the system to replace the video I'm watching when I swipe up."
 
 ## Autoplay
-"As a user, I want the system to populate a new video when the current one ends."
+"As a user, I want the system to play videos by default when I open the app."
 
 ## Previously Watched
 "As a user, I want to be able to swipe down from the current video to revisit the previous video."

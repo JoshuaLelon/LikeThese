@@ -67,6 +67,16 @@ thumbnail_count=$(echo "$existing_thumbnails" | grep -c "^" || true)
 if [ "$video_count" -gt 0 ] && [ "$thumbnail_count" -gt 0 ]; then
     echo -e "${GREEN}✓ Found $video_count videos and $thumbnail_count thumbnails in Firebase Storage${NC}"
     echo -e "${YELLOW}Skipping video and thumbnail upload...${NC}"
+    echo -e "${YELLOW}Checking and computing missing CLIP embeddings...${NC}"
+    
+    # Check and compute CLIP embeddings for files that need them
+    echo "$existing_videos" | while read -r video; do
+        [ -z "$video" ] && continue
+        basename=$(basename "$video" .mp4)
+        echo -e "\n${YELLOW}Checking CLIP embedding for $basename...${NC}"
+        node update_firestore.js update "$basename"
+    done
+    
     echo -e "${YELLOW}Proceeding to verify Firestore documents...${NC}"
 else
     print_section "Processing local files"
@@ -107,31 +117,88 @@ else
     print_section "Uploading to Firebase Storage"
     echo -e "${GREEN}Starting upload to Firebase...${NC}"
 
-    # Upload videos and thumbnails
+    # Function to compute CLIP embedding
+    compute_clip_embedding() {
+        local video_name=$1
+        local force_update=$2
+        echo "🔄 Computing CLIP embedding for $video_name..."
+        if [ "$force_update" = true ]; then
+            node update_firestore.js update "$video_name"
+        else
+            node update_firestore.js create "$video_name"
+        fi
+    }
+
+    # Main processing loop
     for video in "$VIDEO_DIR"/*.mp4; do
-        basename=$(basename "$video" .mp4)
-        thumbnail="$THUMBNAIL_DIR/${basename}.jpg"
-        
-        echo -e "\n${YELLOW}Processing $basename...${NC}"
-        
-        # Upload video
-        echo "Uploading video $basename..."
-        if ! gsutil cp "$video" "gs://likethese-fc23d.firebasestorage.app/videos/${basename}.mp4"; then
-            echo -e "${RED}Failed to upload video $basename${NC}"
-            continue
+        video_name=$(basename "$video" .mp4)
+        echo -e "\n🎥 Processing $video_name..."
+
+        # Check if video exists in Firebase Storage
+        if gsutil -q stat "gs://likethese-fc23d.firebasestorage.app/videos/$video_name.mp4"; then
+            echo "✅ Video already exists in Firebase Storage"
+        else
+            echo "📤 Uploading video to Firebase Storage..."
+            gsutil cp "$video" "gs://likethese-fc23d.firebasestorage.app/videos/$video_name.mp4"
+            echo "✅ Video uploaded successfully"
         fi
-        echo -e "${GREEN}✓ Uploaded video $basename${NC}"
-        
-        # Upload thumbnail
-        echo "Uploading thumbnail for $basename..."
-        if ! gsutil cp "$thumbnail" "gs://likethese-fc23d.firebasestorage.app/thumbnails/${basename}.jpg"; then
-            echo -e "${RED}Failed to upload thumbnail for $basename${NC}"
-            continue
+
+        # Generate and upload thumbnail if needed
+        thumbnail_path="$THUMBNAIL_DIR/$video_name.jpg"
+        if [ ! -f "$thumbnail_path" ]; then
+            echo "🖼️ Generating thumbnail..."
+            ffmpeg -i "$video" -vf "select=eq(n\,0)" -vframes 1 "$thumbnail_path"
+            echo "✅ Thumbnail generated"
         fi
-        echo -e "${GREEN}✓ Uploaded thumbnail for $basename${NC}"
-        
-        echo -e "${GREEN}✓ Successfully processed $basename${NC}"
+
+        if gsutil -q stat "gs://likethese-fc23d.firebasestorage.app/thumbnails/$video_name.jpg"; then
+            echo "✅ Thumbnail already exists in Firebase Storage"
+        else
+            echo "📤 Uploading thumbnail to Firebase Storage..."
+            gsutil cp "$thumbnail_path" "gs://likethese-fc23d.firebasestorage.app/thumbnails/$video_name.jpg"
+            echo "✅ Thumbnail uploaded successfully"
+        fi
+
+        # Compute CLIP embedding and update Firestore
+        compute_clip_embedding "$video_name" true
     done
+
+    # Process sample data if available
+    if [ -d "sample_data/videos" ]; then
+        print_section "Processing sample data"
+        for video in sample_data/videos/*.mp4; do
+            video_name=$(basename "$video" .mp4)
+            echo -e "\n🎥 Processing $video_name..."
+
+            # Check if video exists in Firebase Storage
+            if gsutil -q stat "gs://likethese-fc23d.firebasestorage.app/videos/$video_name.mp4"; then
+                echo "✅ Video already exists in Firebase Storage"
+            else
+                echo "📤 Uploading video to Firebase Storage..."
+                gsutil cp "$video" "gs://likethese-fc23d.firebasestorage.app/videos/$video_name.mp4"
+                echo "✅ Video uploaded successfully"
+            fi
+
+            # Generate and upload thumbnail if needed
+            thumbnail_path="sample_data/thumbnails/$video_name.jpg"
+            if [ ! -f "$thumbnail_path" ]; then
+                echo "🖼️ Generating thumbnail..."
+                ffmpeg -i "$video" -vf "select=eq(n\,0)" -vframes 1 "$thumbnail_path"
+                echo "✅ Thumbnail generated"
+            fi
+
+            if gsutil -q stat "gs://likethese-fc23d.firebasestorage.app/thumbnails/$video_name.jpg"; then
+                echo "✅ Thumbnail already exists in Firebase Storage"
+            else
+                echo "📤 Uploading thumbnail to Firebase Storage..."
+                gsutil cp "$thumbnail_path" "gs://likethese-fc23d.firebasestorage.app/thumbnails/$video_name.jpg"
+                echo "✅ Thumbnail uploaded successfully"
+            fi
+
+            # Compute CLIP embedding and update Firestore
+            compute_clip_embedding "$video_name" true
+        done
+    fi
 fi
 
 # Verify and create Firestore documents if needed
@@ -143,13 +210,13 @@ echo "$existing_videos" | while read -r video; do
     echo -e "\n${YELLOW}Processing $basename...${NC}"
     
     # Check if document exists
-    if node scripts/update_firestore.js check "$basename"; then
+    if node update_firestore.js check "$basename"; then
         echo -e "${GREEN}✓ Document already exists for $basename${NC}"
     else
         echo -e "${YELLOW}Document missing for $basename, creating...${NC}"
         
         # Create Firestore document using Node.js script
-        if node scripts/update_firestore.js create "$basename"; then
+        if node update_firestore.js create "$basename"; then
             echo -e "${GREEN}✓ Successfully created document for $basename${NC}"
         else
             echo -e "${RED}✗ Failed to create document for $basename${NC}"
@@ -169,6 +236,6 @@ echo "$existing_thumbnails"
 
 # Print all Firestore documents
 print_section "Current Firestore Documents"
-node scripts/update_firestore.js list
+node update_firestore.js list
 
 echo -e "\n${GREEN}✓ Verification complete!${NC}" 

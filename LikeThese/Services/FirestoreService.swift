@@ -1,11 +1,8 @@
-import FirebaseCore
+import Foundation
 import FirebaseFirestore
 import FirebaseStorage
 import FirebaseAuth
-import os
 import Network
-
-private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "FirestoreService")
 
 enum FirestoreError: Error {
     case invalidVideoURL(String)
@@ -40,7 +37,7 @@ class FirestoreService {
     private let retryDelay: UInt64 = 1_000_000_000 // 1 second in nanoseconds
     
     private init() {
-        logger.debug("🔥 FirestoreService initialized")
+        print("🔥 FirestoreService initialized")
         setupNetworkMonitoring()
     }
     
@@ -49,15 +46,15 @@ class FirestoreService {
             if let self {
                 let oldStatus = self.isNetworkAvailable
                 self.isNetworkAvailable = path.status == .satisfied
-                logger.debug("Network status changed: \(path.status == .satisfied ? "Connected" : "Disconnected")")
+                print("Network status changed: \(path.status == .satisfied ? "Connected" : "Disconnected")")
                 
                 // If network just became available, enable network for Firestore
                 if !oldStatus && self.isNetworkAvailable {
                     self.db.enableNetwork { error in
                         if let error = error {
-                            logger.error("❌ Failed to enable network: \(error.localizedDescription)")
+                            print("❌ Failed to enable network: \(error.localizedDescription)")
                         } else {
-                            logger.debug("✅ Network enabled for Firestore")
+                            print("✅ Network enabled for Firestore")
                         }
                     }
                 }
@@ -72,12 +69,12 @@ class FirestoreService {
     
     private func handleNetworkError(_ error: Error, attempt: Int) async throws {
         guard attempt < self.maxRetries else {
-            logger.error("❌ Max retries reached: \(error.localizedDescription)")
+            print("❌ Max retries reached: \(error.localizedDescription)")
             throw FirestoreError.maxRetriesReached
         }
         
         if !self.isNetworkAvailable {
-            logger.error("❌ Network unavailable, waiting for connection...")
+            print("❌ Network unavailable, waiting for connection...")
             // Wait for network to become available
             while !self.isNetworkAvailable {
                 try await Task.sleep(nanoseconds: self.retryDelay)
@@ -95,39 +92,39 @@ class FirestoreService {
             }
         }
         
-        logger.debug("🔄 Retrying operation (attempt \(attempt + 1)/\(self.maxRetries))...")
+        print("🔄 Retrying operation (attempt \(attempt + 1)/\(self.maxRetries))...")
         try await Task.sleep(nanoseconds: self.retryDelay * UInt64(attempt + 1))
     }
     
     private func getSignedURL(for path: String) async throws -> URL {
         do {
-            logger.debug("🔄 Getting signed URL for path: \(path)")
+            print("🔄 Getting signed URL for path: \(path)")
             let storageRef = storage.reference(withPath: path)
             let signedURLString = try await storageRef.downloadURL()
-            logger.debug("✅ Successfully got signed URL: \(signedURLString)")
+            print("✅ Successfully got signed URL: \(signedURLString)")
             return signedURLString
         } catch {
-            logger.error("❌ Failed to get signed URL for path \(path): \(error.localizedDescription)")
+            print("❌ Failed to get signed URL for path \(path): \(error.localizedDescription)")
             throw FirestoreError.networkError(error)
         }
     }
     
     private func validateVideoData(_ data: [String: Any], documentId: String) async throws -> Video {
-        logger.debug("🔄 Validating video data for document: \(documentId)")
-        logger.debug("📄 Document data: \(data)")
+        print("🔄 Validating video data for document: \(documentId)")
+        print("📄 Document data: \(data)")
         
         // First try to use signed URLs if available
         if let signedVideoUrl = data["signedVideoUrl"] as? String,
            let signedThumbnailUrl = data["signedThumbnailUrl"] as? String {
-            logger.debug("✅ Using pre-signed URLs")
+            print("✅ Using pre-signed URLs")
             let video = Video(
                 id: documentId,
                 url: signedVideoUrl,
                 thumbnailUrl: signedThumbnailUrl,
                 timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
             )
-            logger.debug("📄 Video URL: \(signedVideoUrl)")
-            logger.debug("📄 Thumbnail URL: \(signedThumbnailUrl)")
+            print("📄 Video URL: \(signedVideoUrl)")
+            print("📄 Thumbnail URL: \(signedThumbnailUrl)")
             return video
         }
         
@@ -142,10 +139,10 @@ class FirestoreService {
                 thumbnailUrl: thumbnailURL,
                 timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
             )
-            logger.debug("✅ Generated new signed URLs from paths")
-            logger.debug("📄 Video URL: \(videoURL)")
+            print("✅ Generated new signed URLs from paths")
+            print("📄 Video URL: \(videoURL)")
             if let thumbURL = thumbnailURL {
-                logger.debug("📄 Thumbnail URL: \(thumbURL)")
+                print("📄 Thumbnail URL: \(thumbURL)")
             }
             return video
         }
@@ -159,20 +156,20 @@ class FirestoreService {
                 if let filename = components.last {
                     let storagePath = "videos/\(filename)"
                     videoURL = try await getSignedURL(for: storagePath).absoluteString
-                    logger.debug("✅ Generated signed URL from storage URL")
+                    print("✅ Generated signed URL from storage URL")
                 } else {
-                    logger.error("❌ Invalid video URL format: \(url)")
+                    print("❌ Invalid video URL format: \(url)")
                     throw FirestoreError.invalidVideoURL(url)
                 }
             } else {
                 videoURL = url
-                logger.debug("✅ Using direct video URL")
+                print("✅ Using direct video URL")
             }
         } else if let videoFilePath = data["videoFilePath"] as? String {
             videoURL = try await getSignedURL(for: videoFilePath).absoluteString
-            logger.debug("✅ Generated signed URL from storage path")
+            print("✅ Generated signed URL from storage path")
         } else {
-            logger.error("❌ No video URL or storage path found in document: \(documentId)")
+            print("❌ No video URL or storage path found in document: \(documentId)")
             throw FirestoreError.invalidVideoData
         }
         
@@ -185,26 +182,26 @@ class FirestoreService {
                 if let filename = components.last {
                     let storagePath = "thumbnails/\(filename)"
                     thumbnailURL = try await getSignedURL(for: storagePath).absoluteString
-                    logger.debug("✅ Generated signed thumbnail URL from storage URL")
+                    print("✅ Generated signed thumbnail URL from storage URL")
                 } else {
-                    logger.error("⚠️ Invalid thumbnail URL format: \(url), continuing without thumbnail")
+                    print("⚠️ Invalid thumbnail URL format: \(url), continuing without thumbnail")
                     thumbnailURL = nil
                 }
             } else {
                 thumbnailURL = url
-                logger.debug("✅ Using direct thumbnail URL")
+                print("✅ Using direct thumbnail URL")
             }
         } else if let thumbnailPath = data["thumbnailFilePath"] as? String {
             do {
                 thumbnailURL = try await getSignedURL(for: thumbnailPath).absoluteString
-                logger.debug("✅ Generated signed thumbnail URL from storage path")
+                print("✅ Generated signed thumbnail URL from storage path")
             } catch {
-                logger.error("⚠️ Failed to get thumbnail URL, continuing without thumbnail: \(error.localizedDescription)")
+                print("⚠️ Failed to get thumbnail URL, continuing without thumbnail: \(error.localizedDescription)")
                 thumbnailURL = nil
             }
         } else {
             thumbnailURL = nil
-            logger.debug("ℹ️ No thumbnail URL or path found")
+            print("ℹ️ No thumbnail URL or path found")
         }
         
         let video = Video(
@@ -214,10 +211,10 @@ class FirestoreService {
             timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
         )
         
-        logger.debug("✅ Successfully validated video data for: \(documentId)")
-        logger.debug("📄 Video URL: \(videoURL)")
+        print("✅ Successfully validated video data for: \(documentId)")
+        print("📄 Video URL: \(videoURL)")
         if let thumbURL = thumbnailURL {
-            logger.debug("📄 Thumbnail URL: \(thumbURL)")
+            print("📄 Thumbnail URL: \(thumbURL)")
         }
         return video
     }
@@ -229,13 +226,13 @@ class FirestoreService {
             do {
                 return try await operation()
             } catch let error as NSError {
-                logger.error("❌ Operation failed (attempt \(currentAttempt + 1)/\(maxAttempts)): \(error.localizedDescription)")
+                print("❌ Operation failed (attempt \(currentAttempt + 1)/\(maxAttempts)): \(error.localizedDescription)")
                 
                 // Retry on network errors or Firebase errors
                 if error.domain == NSPOSIXErrorDomain || error.domain.contains("Firebase") {
                     currentAttempt += 1
                     if currentAttempt < maxAttempts {
-                        logger.debug("🔄 Retrying in 1 second...")
+                        print("🔄 Retrying in 1 second...")
                         try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
                         continue
                     }
@@ -250,7 +247,7 @@ class FirestoreService {
     }
     
     func fetchInitialVideos(limit: Int) async throws -> [Video] {
-        logger.debug("📥 Fetching initial \(limit) videos")
+        print("📥 Fetching initial \(limit) videos")
         
         return try await executeWithRetry { [weak self] in
             guard let self = self else { throw FirestoreError.invalidVideoData }
@@ -260,7 +257,7 @@ class FirestoreService {
                 .limit(to: limit)
             
             let snapshot = try await videosRef.getDocuments()
-            logger.debug("✅ Fetched \(snapshot.documents.count) initial videos")
+            print("✅ Fetched \(snapshot.documents.count) initial videos")
             
             if snapshot.documents.isEmpty {
                 throw FirestoreError.emptyVideoCollection
@@ -269,14 +266,14 @@ class FirestoreService {
             var videos: [Video] = []
             for document in snapshot.documents {
                 let data = document.data()
-                logger.debug("🔄 Processing document: \(document.documentID)")
+                print("🔄 Processing document: \(document.documentID)")
                 let video = try await validateVideoData(data, documentId: document.documentID)
                 videos.append(video)
             }
             
             // If we don't have enough videos, replicate existing ones
             if videos.count < limit {
-                logger.debug("⚠️ Not enough videos, replicating existing ones")
+                print("⚠️ Not enough videos, replicating existing ones")
                 while videos.count < limit {
                     // Take a random video from the existing ones and create a copy
                     if let originalVideo = videos.randomElement() {
@@ -296,7 +293,7 @@ class FirestoreService {
     }
     
     func fetchMoreVideos(after lastVideoId: String, limit: Int) async throws -> [Video] {
-        logger.debug("📥 Fetching \(limit) more videos after \(lastVideoId)")
+        print("📥 Fetching \(limit) more videos after \(lastVideoId)")
         
         return try await executeWithRetry { [weak self] in
             guard let self = self else { throw FirestoreError.invalidVideoData }
@@ -316,7 +313,7 @@ class FirestoreService {
                 .limit(to: limit)
             
             let snapshot = try await videosRef.getDocuments()
-            logger.debug("✅ Fetched \(snapshot.documents.count) more videos")
+            print("✅ Fetched \(snapshot.documents.count) more videos")
             
             if snapshot.documents.isEmpty {
                 throw FirestoreError.emptyVideoCollection
@@ -333,17 +330,17 @@ class FirestoreService {
     }
     
     func fetchReplacementVideo(excluding currentVideoId: String) async throws -> Video {
-        logger.debug("🔄 Fetching replacement video excluding: \(currentVideoId)")
+        print("🔄 Fetching replacement video excluding: \(currentVideoId)")
         
         // Check auth state
         guard Auth.auth().currentUser != nil else {
-            logger.error("❌ User not authenticated")
+            print("❌ User not authenticated")
             throw FirestoreError.networkError(NSError(domain: "FirestoreService", code: -1, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"]))
         }
         
         // Check network state
         guard isNetworkAvailable else {
-            logger.error("❌ Network unavailable")
+            print("❌ Network unavailable")
             throw FirestoreError.networkError(NSError(domain: "FirestoreService", code: -2, userInfo: [NSLocalizedDescriptionKey: "Network unavailable"]))
         }
         
@@ -358,14 +355,14 @@ class FirestoreService {
             let filteredDocs = snapshot.documents.filter { $0.documentID != currentVideoId }
             
             guard let document = filteredDocs.first else {
-                logger.debug("❌ No replacement video found")
+                print("❌ No replacement video found")
                 throw FirestoreError.emptyVideoCollection
             }
             
             let data = document.data()
             return try await validateVideoData(data, documentId: document.documentID)
         } catch let error as NSError {
-            logger.error("❌ Error fetching replacement video: \(error.localizedDescription)")
+            print("❌ Error fetching replacement video: \(error.localizedDescription)")
             if error.domain.contains("Firebase") || error.domain == NSPOSIXErrorDomain {
                 throw FirestoreError.networkError(error)
             }
@@ -376,7 +373,7 @@ class FirestoreService {
     func recordSkipInteraction(videoId: String) async {
         guard let userId = Auth.auth().currentUser?.uid else { return }
         
-        logger.debug("📝 Recording skip interaction for video: \(videoId)")
+        print("📝 Recording skip interaction for video: \(videoId)")
         let interaction = [
             "userId": userId,
             "videoId": videoId,
@@ -386,9 +383,9 @@ class FirestoreService {
         
         do {
             try await db.collection("interactions").addDocument(data: interaction)
-            logger.debug("✅ Recorded skip interaction")
+            print("✅ Recorded skip interaction")
         } catch {
-            logger.error("❌ Error recording skip interaction: \(error.localizedDescription)")
+            print("❌ Error recording skip interaction: \(error.localizedDescription)")
             print("Error recording skip interaction: \(error)")
         }
     }
@@ -417,7 +414,7 @@ class FirestoreService {
     }
     
     func fetchRandomVideo() async throws -> Video {
-        logger.debug("🎲 Fetching random video")
+        print("🎲 Fetching random video")
         
         return try await executeWithRetry { [weak self] in
             guard let self = self else { throw FirestoreError.invalidVideoData }
@@ -434,13 +431,13 @@ class FirestoreService {
             let randomDoc = snapshot.documents.randomElement()!
             let data = randomDoc.data()
             
-            logger.debug("🎲 Selected random video: \(randomDoc.documentID)")
+            print("🎲 Selected random video: \(randomDoc.documentID)")
             let video = try await validateVideoData(data, documentId: randomDoc.documentID)
             
             // If this is a replica request and we're running low on videos,
             // create a replica instead of fetching a new one
             if snapshot.documents.count < 4 {
-                logger.debug("⚠️ Low on videos, creating replica")
+                print("⚠️ Low on videos, creating replica")
                 return Video(
                     id: "\(video.id)_replica_\(UUID().uuidString)",
                     url: video.url,

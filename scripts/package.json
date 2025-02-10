@@ -1,0 +1,11 @@
+{
+  "name": "likethese-scripts",
+  "version": "1.0.0",
+  "description": "Scripts for LikeThese video management",
+  "main": "update_firestore.js",
+  "dependencies": {
+    "firebase-admin": "^11.11.1",
+    "dotenv": "^16.4.1",
+    "replicate": "^0.25.1"
+  }
+} 

@@ -1,8 +1,5 @@
 import SwiftUI
 import AVKit
-import os
-
-private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoPlayer")
 
 struct VideoPlayerView: View {
     let url: URL
@@ -20,7 +17,7 @@ struct VideoPlayerView: View {
                 .clipped()
                 .ignoresSafeArea()
                 .onAppear {
-                    logger.debug("📱 VIDEO PLAYER: View appeared for index \(index)")
+                    print("📱 VIDEO PLAYER: View appeared for index \(index)")
                     Task {
                         await loadVideo()
                     }
@@ -58,10 +55,10 @@ struct VideoPlayerView: View {
                 }
                 break // Success - exit loop
             } catch {
-                logger.error("❌ VIDEO PLAYER: Failed to load video at index \(index): \(error.localizedDescription)")
+                print("❌ VIDEO PLAYER: Failed to load video at index \(index): \(error.localizedDescription)")
                 retryCount += 1
                 if retryCount >= maxRetries {
-                    logger.error("❌ VIDEO PLAYER: Max retries reached for video at index \(index)")
+                    print("❌ VIDEO PLAYER: Max retries reached for video at index \(index)")
                     break
                 }
                 try? await Task.sleep(nanoseconds: UInt64(1_000_000_000)) // Wait 1 second before retry

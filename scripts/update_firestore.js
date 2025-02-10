@@ -1,6 +1,8 @@
 const admin = require('firebase-admin');
 const path = require('path');
+const Replicate = require('replicate');
 const serviceAccount = require(path.join(__dirname, '..', 'service-account.json'));
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 // Initialize Firebase Admin
 if (!admin.apps.length) {
@@ -12,9 +14,36 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 const bucket = admin.storage().bucket('likethese-fc23d.firebasestorage.app');
 
-// Command can be 'check', 'create', or 'list'
+// Initialize Replicate
+if (!process.env.REPLICATE_API_TOKEN) {
+    console.error('⚠️ REPLICATE_API_TOKEN not found in environment');
+    process.exit(1);
+}
+
+const replicate = new Replicate({
+    auth: process.env.REPLICATE_API_TOKEN,
+});
+
+// Command can be 'check', 'create', 'update', or 'list'
 const command = process.argv[2];
 const basename = process.argv[3];
+
+// Get CLIP embeddings using Replicate
+async function getClipEmbedding(imageUrl) {
+    console.log(`\n🔄 Getting CLIP embedding for ${imageUrl}`);
+    const output = await replicate.run(
+        "zsxkib/jina-clip-v2:5050c3108bab23981802011a3c76ee327cc0dbfdd31a2f4ef1ee8ef0d3f0b448",
+        {
+            input: {
+                image: imageUrl,
+                embedding_dim: 512,
+                output_format: "array"
+            }
+        }
+    );
+    console.log("✅ Successfully got CLIP embedding");
+    return output[0];
+}
 
 async function checkDocument(basename) {
     console.log(`\n🔍 Checking for existing document: ${basename}`);
@@ -44,6 +73,18 @@ async function getSignedUrl(filePath) {
     }
 }
 
+// Check if CLIP embeddings exist for a video
+async function hasClipEmbedding(basename) {
+    console.log(`\n🔍 Checking for CLIP embedding: ${basename}`);
+    const doc = await db.collection('videos').doc(basename).get();
+    if (doc.exists && doc.data().clipEmbedding) {
+        console.log(`✅ Found existing CLIP embedding for ${basename}`);
+        return true;
+    }
+    console.log(`➖ No CLIP embedding found for ${basename}`);
+    return false;
+}
+
 async function createDocument(basename) {
     console.log(`\n📝 Creating document for: ${basename}`);
     
@@ -51,6 +92,12 @@ async function createDocument(basename) {
     const doc = await db.collection('videos').doc(basename).get();
     if (doc.exists) {
         console.log(`⚠️ Document already exists for ${basename}, skipping creation`);
+        return;
+    }
+
+    // Check if CLIP embedding already exists
+    if (await hasClipEmbedding(basename)) {
+        console.log(`✅ Using existing CLIP embedding for ${basename}`);
         return;
     }
 
@@ -65,10 +112,15 @@ async function createDocument(basename) {
     const signed_video_url = await getSignedUrl(`videos/${basename}.mp4`);
     const signed_thumbnail_url = await getSignedUrl(`thumbnails/${basename}.jpg`);
 
-    if (!signed_video_url) {
-        console.error(`⚠️ Failed to get signed video URL for ${basename}`);
+    if (!signed_video_url || !signed_thumbnail_url) {
+        console.error(`⚠️ Failed to get signed URLs for ${basename}`);
         return;
     }
+
+    // Get CLIP embedding for the thumbnail using signed URL
+    console.log(`\n🔄 Computing CLIP embedding...`);
+    const clipEmbedding = await getClipEmbedding(signed_thumbnail_url);
+    console.log(`✅ Successfully computed CLIP embedding`);
 
     console.log(`\n💾 Saving document to Firestore...`);
     await db.collection('videos').doc(basename).set({
@@ -80,9 +132,11 @@ async function createDocument(basename) {
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
         // Store paths for easy re-signing
         videoPath: `videos/${basename}.mp4`,
-        thumbnailPath: `thumbnails/${basename}.jpg`
+        thumbnailPath: `thumbnails/${basename}.jpg`,
+        // Store CLIP embedding
+        clipEmbedding: clipEmbedding
     });
-    console.log(`✅ Successfully created document for ${basename} with signed URLs`);
+    console.log(`✅ Successfully created document for ${basename} with signed URLs and CLIP embedding`);
     console.log(`\n📄 Document contents:`);
     console.log(JSON.stringify({
         id: basename,
@@ -91,8 +145,43 @@ async function createDocument(basename) {
         signedVideoUrl: '(signed url)',
         signedThumbnailUrl: signed_thumbnail_url ? '(signed url)' : null,
         videoPath: `videos/${basename}.mp4`,
-        thumbnailPath: `thumbnails/${basename}.jpg`
+        thumbnailPath: `thumbnails/${basename}.jpg`,
+        clipEmbedding: '(embedding array)'
     }, null, 2));
+}
+
+async function updateDocument(basename) {
+    console.log(`\n📝 Updating document for: ${basename}`);
+    
+    // Check if document exists
+    const doc = await db.collection('videos').doc(basename).get();
+    if (!doc.exists) {
+        console.log(`⚠️ Document doesn't exist for ${basename}, creating instead...`);
+        return createDocument(basename);
+    }
+
+    // Check if CLIP embedding already exists
+    if (await hasClipEmbedding(basename)) {
+        console.log(`✅ Using existing CLIP embedding for ${basename}`);
+        return;
+    }
+
+    // Get a fresh signed URL for the thumbnail
+    const signedThumbnailUrl = await getSignedUrl(`thumbnails/${basename}.jpg`);
+    if (!signedThumbnailUrl) {
+        console.error(`⚠️ Failed to get signed URL for thumbnail: ${basename}`);
+        return;
+    }
+
+    console.log(`🔄 Computing CLIP embedding for ${basename}...`);
+    const clipEmbedding = await getClipEmbedding(signedThumbnailUrl);
+    console.log(`✅ Successfully computed CLIP embedding`);
+
+    console.log(`\n💾 Updating document in Firestore...`);
+    await db.collection('videos').doc(basename).update({
+        clipEmbedding: clipEmbedding
+    });
+    console.log(`✅ Successfully updated document for ${basename} with CLIP embedding`);
 }
 
 async function listDocuments() {
@@ -140,6 +229,17 @@ if (command === 'check') {
             console.error('⚠️ Error creating document:', error);
             process.exit(1);
         });
+} else if (command === 'update') {
+    if (!basename) {
+        console.error('⚠️ Please provide a video name to update');
+        process.exit(1);
+    }
+    updateDocument(basename)
+        .then(() => process.exit(0))
+        .catch(error => {
+            console.error('⚠️ Error updating document:', error);
+            process.exit(1);
+        });
 } else if (command === 'list') {
     listDocuments()
         .then(() => process.exit(0))
@@ -148,6 +248,6 @@ if (command === 'check') {
             process.exit(1);
         });
 } else {
-    console.error('⚠️ Please provide a valid command: check, create, or list');
+    console.error('⚠️ Please provide a valid command: check, create, update, or list');
     process.exit(1);
 } 

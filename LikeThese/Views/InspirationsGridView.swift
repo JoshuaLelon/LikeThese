@@ -1,7 +1,4 @@
 import SwiftUI
-import os
-
-private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "InspirationsGrid")
 
 struct InspirationsGridView: View {
     @StateObject private var viewModel = VideoViewModel()
@@ -71,7 +68,7 @@ struct InspirationsGridView: View {
         // Account for spacing and padding
         let availableWidth = (width - gridPadding * 2 - gridSpacing) / 2
         let height = availableWidth * (16/9)
-        logger.debug("📐 GRID: Calculated video height \(height) for width \(width)")
+        print("📐 GRID: Calculated video height \(height) for width \(width)")
         return height
     }
     
@@ -103,11 +100,11 @@ struct InspirationsGridView: View {
                         viewModel: viewModel
                     )
                     .onAppear {
-                        logger.info("🎥 Navigation - Selected video ID: \(video.id), Index: \(index), Total Videos: \(viewModel.videos.count)")
+                        print("🎥 Navigation - Selected video ID: \(video.id), Index: \(index), Total Videos: \(viewModel.videos.count)")
                     }
                     .onDisappear {
                         isReturningFromVideo = true
-                        logger.info("🔄 NAVIGATION: Returning from video playback")
+                        print("🔄 NAVIGATION: Returning from video playback")
                     }
                 }
             }
@@ -122,12 +119,12 @@ struct InspirationsGridView: View {
         .task {
             await viewModel.loadInitialVideos()
             gridVideos = viewModel.videos
-            logger.info("📱 Grid initialized with \(gridVideos.count) videos")
+            print("📱 Grid initialized with \(gridVideos.count) videos")
         }
         .onChange(of: viewModel.videos) { newVideos in
             withAnimation(.spring()) {
                 gridVideos = newVideos
-                logger.info("🔄 Grid updated with \(gridVideos.count) videos")
+                print("🔄 Grid updated with \(gridVideos.count) videos")
             }
         }
         .onAppear {
@@ -135,7 +132,7 @@ struct InspirationsGridView: View {
                 // Restore state when returning from video playback
                 viewModel.restorePreservedState()
                 isReturningFromVideo = false
-                logger.info("🔄 NAVIGATION: Restored grid state after video playback")
+                print("🔄 NAVIGATION: Restored grid state after video playback")
             }
         }
     }
@@ -250,10 +247,10 @@ struct InspirationsGridView: View {
         let isPartOfMultiSwipe = swipingVideos.contains(video.id)
         
         if isLoading {
-            logger.debug("⏳ GRID ITEM: Loading state for video \(video.id) at index \(index)")
+            print("⏳ GRID ITEM: Loading state for video \(video.id) at index \(index)")
         }
         if isPreloadingThumbnail {
-            logger.debug("🔄 GRID ITEM: Preloading thumbnail for video \(video.id) at index \(index)")
+            print("🔄 GRID ITEM: Preloading thumbnail for video \(video.id) at index \(index)")
         }
         
         return AsyncImage(url: video.thumbnailUrl.flatMap { URL(string: $0) }) { phase in
@@ -262,19 +259,19 @@ struct InspirationsGridView: View {
                 case .empty:
                     LoadingView(message: isPreloadingThumbnail ? "Preloading..." : "Loading thumbnail...")
                     .onAppear {
-                        logger.debug("⏳ THUMBNAIL: Started loading for video \(video.id)")
+                        print("⏳ THUMBNAIL: Started loading for video \(video.id)")
                     }
                 case .success(let image):
                     image
                         .resizable()
                         .aspectRatio(9/16, contentMode: .fill)
                         .onAppear {
-                            logger.debug("✅ THUMBNAIL: Successfully loaded for video \(video.id)")
+                            print("✅ THUMBNAIL: Successfully loaded for video \(video.id)")
                         }
                 case .failure:
                     LoadingView(message: "Failed to load", isError: true)
                         .onAppear {
-                            logger.error("❌ THUMBNAIL: Failed to load for video \(video.id)")
+                            print("❌ THUMBNAIL: Failed to load for video \(video.id)")
                         }
                 @unknown default:
                     LoadingView(message: "Loading...")
@@ -304,7 +301,7 @@ struct InspirationsGridView: View {
                             isSwipeInProgress = true
                             swipingVideoId = video.id
                             swipeOffset = value.translation.height
-                            logger.debug("🔄 SWIPE: Single video swipe in progress - Video: \(video.id), Offset: \(value.translation.height)")
+                            print("🔄 SWIPE: Single video swipe in progress - Video: \(video.id), Offset: \(value.translation.height)")
                             
                             // Update opacity based on swipe progress
                             withAnimation(.easeInOut(duration: 0.1)) {
@@ -316,19 +313,19 @@ struct InspirationsGridView: View {
                         if !isSwipingGap && !isLoading {
                             let threshold: CGFloat = -90 // 30% of 300px height
                             if value.translation.height < threshold {
-                                logger.debug("🗑️ SWIPE: Removing single video \(video.id) after successful swipe")
+                                print("🗑️ SWIPE: Removing single video \(video.id) after successful swipe")
                                 triggerHapticFeedback()
                                 
                                 Task {
                                     loadingSlots.insert(index)
-                                    logger.debug("⏳ LOADING: Started loading state for index \(index)")
+                                    print("⏳ LOADING: Started loading state for index \(index)")
                                     await viewModel.removeVideo(video.id)
-                                    logger.debug("✅ REMOVAL: Completed removal of video \(video.id)")
+                                    print("✅ REMOVAL: Completed removal of video \(video.id)")
                                     loadingSlots.remove(index)
-                                    logger.debug("✨ CLEANUP: Cleared loading state for index \(index)")
+                                    print("✨ CLEANUP: Cleared loading state for index \(index)")
                                 }
                             } else {
-                                logger.debug("↩️ SWIPE: Cancelled swipe for video \(video.id)")
+                                print("↩️ SWIPE: Cancelled swipe for video \(video.id)")
                                 withAnimation(.spring()) {
                                     swipeOffset = 0
                                     swipeOpacity = 1.0
@@ -403,7 +400,7 @@ struct InspirationsGridView: View {
             
             // Preserve state before navigation
             viewModel.preserveCurrentState()
-            logger.info("🔄 NAVIGATION: Preserved grid state before video playback")
+            print("🔄 NAVIGATION: Preserved grid state before video playback")
             
             // Prepare for playback
             videoManager.prepareForPlayback(at: index)
@@ -428,12 +425,12 @@ struct InspirationsGridView: View {
             selectedIndex = index
             isVideoPlaybackActive = true
             isNavigatingToVideo = false
-            logger.info("🎥 NAVIGATION: Successfully navigated to video at index \(index)")
+            print("🎥 NAVIGATION: Successfully navigated to video at index \(index)")
         } catch {
             isNavigatingToVideo = false
             errorMessage = error.localizedDescription
             showError = true
-            logger.error("❌ NAVIGATION: Failed to navigate to video at index \(index): \(error.localizedDescription)")
+            print("❌ NAVIGATION: Failed to navigate to video at index \(index): \(error.localizedDescription)")
         }
     }
     
@@ -458,14 +455,14 @@ struct InspirationsGridView: View {
     private func calculateOpacity(for translation: CGFloat, threshold: CGFloat) -> CGFloat {
         let progress = min(abs(translation) / (threshold * UIScreen.main.bounds.height), 1.0)
         let opacity = 1.0 - (progress * 0.5)
-        logger.debug("🎨 OPACITY: Calculated opacity \(opacity) for translation \(translation)")
+        print("🎨 OPACITY: Calculated opacity \(opacity) for translation \(translation)")
         return opacity
     }
     
     private func triggerHapticFeedback() {
         feedbackGenerator.prepare()
         feedbackGenerator.impactOccurred()
-        logger.debug("📳 HAPTIC: Triggered feedback")
+        print("📳 HAPTIC: Triggered feedback")
     }
     
     private func handleGapDragChange(_ value: DragGesture.Value, at location: GapLocation) {
@@ -479,7 +476,7 @@ struct InspirationsGridView: View {
             case .vertical(let index): "vertical gap at index \(index)"
             case .center: "center gap"
         }
-        logger.debug("🔄 SWIPE: Multi-swipe in progress - Location: \(locationDesc), Offset: \(value.translation.height)")
+        print("🔄 SWIPE: Multi-swipe in progress - Location: \(locationDesc), Offset: \(value.translation.height)")
         
         // Update opacity based on swipe progress
         let threshold = location == .center ? fourVideoSwipeThreshold : twoVideoSwipeThreshold
@@ -496,7 +493,7 @@ struct InspirationsGridView: View {
                 if index + 1 < gridVideos.count {
                     swipingVideos.insert(gridVideos[index + 1].id)
                 }
-                logger.debug("👆 SWIPE: Affecting horizontal videos at indices \(index) and \(index + 1)")
+                print("👆 SWIPE: Affecting horizontal videos at indices \(index) and \(index + 1)")
             }
         case .vertical(let index):
             // For vertical gaps, affect videos above and below
@@ -505,12 +502,12 @@ struct InspirationsGridView: View {
                 if index + 2 < gridVideos.count {
                     swipingVideos.insert(gridVideos[index + 2].id)
                 }
-                logger.debug("👆 SWIPE: Affecting vertical videos at indices \(index) and \(index + 2)")
+                print("👆 SWIPE: Affecting vertical videos at indices \(index) and \(index + 2)")
             }
         case .center:
             // For center point, affect all four videos
             swipingVideos = Set(gridVideos.prefix(4).map { $0.id })
-            logger.debug("👆 SWIPE: Affecting all four videos in grid")
+            print("👆 SWIPE: Affecting all four videos in grid")
         }
     }
     
@@ -521,12 +518,12 @@ struct InspirationsGridView: View {
         let screenHeight = UIScreen.main.bounds.height
         let swipePercentage = swipeDistance / screenHeight
         
-        logger.debug("🔄 SWIPE: Multi-swipe ended - Distance: \(swipeDistance), Percentage: \(swipePercentage * 100)%")
+        print("🔄 SWIPE: Multi-swipe ended - Distance: \(swipeDistance), Percentage: \(swipePercentage * 100)%")
         
         if swipePercentage >= threshold && value.translation.height < 0 {
             // Trigger haptic feedback
             triggerHapticFeedback()
-            logger.debug("📳 FEEDBACK: Triggered haptic for successful multi-swipe")
+            print("📳 FEEDBACK: Triggered haptic for successful multi-swipe")
             
             // Remove affected videos simultaneously
             Task {
@@ -563,7 +560,7 @@ struct InspirationsGridView: View {
         isSwipingGap = false
         swipingGapLocation = nil
         swipingVideos.removeAll()
-        logger.debug("🔄 RESET: Cleared multi-swipe state")
+        print("🔄 RESET: Cleared multi-swipe state")
     }
 }
 

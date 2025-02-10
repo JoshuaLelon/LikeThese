@@ -3,7 +3,7 @@
 "As a user, I want to pause and resume a playing video by tapping anywhere on it during playback."
 
 ## Video Replacement
-"As a user, I want the system to replace the video I'm watching when I swipe up."
+"As a user, I want the system to replace the video I'm watching when I swipe up or when the video ends."
 
 ## Autoplay
 "As a user, I want the system to play videos by default when I open the app."

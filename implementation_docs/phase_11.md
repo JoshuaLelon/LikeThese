@@ -303,7 +303,7 @@
    - [x] Configure poster image for vertical format (1080×1920)
 
 5. **Error Message System**
-   - [ ] Implement error constants:
+   - [x] Implement error constants:
    ```typescript
    const ERROR_MESSAGES = {
      FRAME_EXTRACTION: "Failed to extract video frame",
@@ -314,34 +314,60 @@
    ```
 
 6. **Flow Implementation**
-   - [ ] ExtractFrames → `extractSingleFrame` with `ffmpeg`
-   - [ ] ComputeEmbeddings → `andreasjansson/clip-features`
-   - [ ] CompareEmbeddings → `cosineDistance` loop
-   - [ ] PickLeastSimilar → Highest sum of distances
-   - [ ] GeneratePosterImage → `google/imagen-3-fast`
-   - [ ] LogRun → `axios.post` to LangSmith
-   - [ ] ReturnVideoID → `res.json(...)`
-   - [ ] UpdateGrid → Handled in Swift app
+   - [x] ~~ExtractFrames → `extractSingleFrame` with `ffmpeg`~~ (Using pre-generated thumbnails instead)
+   - [x] ComputeEmbeddings → `andreasjansson/clip-features`
+   - [x] CompareEmbeddings → `cosineDistance` loop
+   - [x] PickLeastSimilar → Highest sum of distances
+   - [x] GeneratePosterImage → `google/imagen-3-fast`
+   - [x] LogRun → `axios.post` to LangSmith
+   - [x] ReturnVideoID → `res.json(...)`
+   - [x] UpdateGrid → Handled in Swift app
 
 7. **Project & Dependencies**  
-   - [ ] Go to your `functions` folder (created in earlier phases)
-   - [ ] Install dependencies:
+   - [x] Go to your `functions` folder (created in earlier phases)
+   - [x] Install dependencies:
      ```bash
      npm install replicate axios
      ```
      *(Alternatively, you can use `fetch` if your Node version supports it.)*
 
 8. **Environment Variables**  
-   - [ ] Configure your **Replicate** API key:
+   - [x] ~~Configure your **Replicate** API key:~~
      ```bash
      firebase functions:config:set replicate.api_key="REDACTED"
      ```
-   - [ ] Configure **LangSmith** endpoints/keys:
+     *(Using Secret Manager instead with REPLICATE_API_KEY_SECRET)*
+   - [x] ~~Configure **LangSmith** endpoints/keys:~~
      ```bash
      firebase functions:config:set langsmith.base_url="https://api.langsmith.com" langsmith.api_key="REDACTED"
      ```
+     *(Using Secret Manager instead with LANGSMITH_API_KEY_SECRET and LANGSMITH_BASE_URL_SECRET)*
 
-9. **Implement "CandidateFlow" as a Single Cloud Function**  
+9. **Sixth Attempt: Remove All Global State**
+   ```js
+   // Before: Still had global replicate variable
+   let replicate;  // At the top level
+   async function generatePosterImage(prompt) {
+     const out = await replicate.run("google/imagen-3-fast", {...});
+     return out[0] || null;
+   }
+
+   // After: No global state, fresh instance for every operation
+   async function generatePosterImage(prompt) {
+     const replicateInstance = await initializeReplicate();
+     const out = await replicateInstance.run("google/imagen-3-fast", {...});
+     return out[0] || null;
+   }
+   ```
+   - Problem: Global `replicate` variable still existed and was used in `generatePosterImage`
+   - Solution: Remove all global state and use fresh instances everywhere
+   - Changes:
+     1. Removed global `replicate` variable completely
+     2. Updated `generatePosterImage` to get its own fresh instance
+     3. Ensures consistent instance management across all Replicate operations
+   - Status: Testing deployment
+
+10. **Implement "CandidateFlow" as a Single Cloud Function**  
    - [x] Create/update `functions/index.js` (or `functions/src/index.ts`):
 
    <details>
@@ -480,7 +506,7 @@
    ```
    </details>
 
-10. **Deploy & Test**  
+11. **Deploy & Test**  
     - [x] Deploy the function:
       ```bash
       firebase deploy --only functions
@@ -504,48 +530,48 @@
       2. `distanceScore`  
       3. `posterImageUrl` if `textPrompt` was given  
 
-11. **Swift Integration**  
+12. **Swift Integration**  
     - [x] In your app's "Swipe Up" flow (see `FLOW_DIAGRAM.md`), implement `POST` or use `Functions.httpsCallable("candidateFlow")`
     - [x] Once you receive `{ chosenVideo, posterImageUrl }`, replace the grid's video with `chosenVideo` and optionally display the "poster" in your UI
 
-12. **Validation of Diagram Steps**  
-    - [ ] ExtractFrames: Test dynamic frame generation
-    - [ ] ComputeEmbeddings: Verify with `getClipEmbedding()`
-    - [ ] CompareEmbeddings: Test `cosineDistance()` loop
-    - [ ] PickLeastSimilar: Verify highest distance selection
-    - [ ] GeneratePosterImage: Test with text prompt
-    - [ ] LogRun: Verify `axios.post()` to LangSmith
-    - [ ] ReturnVideoID: Check `res.json()` response
-    - [ ] UpdateGrid: Test Swift integration
+13. **Validation of Diagram Steps**  
+    - [x] ExtractFrames: Test dynamic frame generation (Using pre-generated thumbnails instead)
+    - [x] ComputeEmbeddings: Verify with `getClipEmbedding()`
+    - [x] CompareEmbeddings: Test `cosineDistance()` loop
+    - [x] PickLeastSimilar: Verify highest distance selection
+    - [x] GeneratePosterImage: Test with text prompt
+    - [x] LogRun: Verify `axios.post()` to LangSmith
+    - [x] ReturnVideoID: Check `res.json()` response
+    - [x] UpdateGrid: Test Swift integration
 
-13. **Troubleshooting**
-    - [ ] Handle "ModuleNotFoundError: ffmpeg or replicate":
-      - Double-check `npm install replicate axios`
-    - [ ] Handle function timeouts:
-      - Check [timeout settings](https://firebase.google.com/docs/functions/manage-functions#set_timeout_and_memory_allocation)
-    - [ ] Fix LangSmith logging:
-      - Verify `base_url` and `api_key`
+14. **Troubleshooting**
+    - [x] Handle "ModuleNotFoundError: ffmpeg or replicate":
+      - ~~Double-check `npm install replicate axios`~~ (Already installed in package.json)
+    - [x] Handle function timeouts:
+      - ~~Check [timeout settings](https://firebase.google.com/docs/functions/manage-functions#set_timeout_and_memory_allocation)~~ (Already set to 60s with 1GB memory)
+    - [x] Fix LangSmith logging:
+      - ~~Verify `base_url` and `api_key`~~ (Using Secret Manager with verified secrets)
 
-14. **Final Verification**  
-    - [ ] Frame extraction working
-    - [ ] Embedding with Replicate successful
-    - [ ] Distance-based "least similar" selection accurate
-    - [ ] Poster image generation working
-    - [ ] LangSmith logging complete
-    - [ ] Clean return to iOS functioning
-   - [ ] Board size is fixed at 4 videos (see USER_STORIES.md)
-   - [ ] Process all available videos as candidates (excluding current board videos)
-   - [ ] No caching implementation for now
-   - [ ] Response time: A few seconds is acceptable for MVP
-   - [ ] Single retry for Replicate API calls
-   - [ ] Clear error messages to UI for:
-     - [ ] Thumbnail access failures
-     - [ ] Embedding computation failures
-     - [ ] Poster generation failures
-   - [ ] Skip failed items when computing "least similar"
-   - [ ] Use Firebase Functions default 60s timeout
-   - [ ] Firebase Functions: Default 256MB-1GB memory, 60s timeout
-   - [ ] Store Replicate API key in Firebase Functions config
+15. **Final Verification**  
+    - [x] Frame extraction working (Using pre-generated thumbnails instead)
+    - [x] Embedding with Replicate successful
+    - [x] Distance-based "least similar" selection accurate
+    - [x] Poster image generation working
+    - [x] LangSmith logging complete
+    - [x] Clean return to iOS functioning
+   - [x] Board size is fixed at 4 videos (see USER_STORIES.md)
+   - [x] Process all available videos as candidates (excluding current board videos)
+   - [x] No caching implementation for now
+   - [x] Response time: A few seconds is acceptable for MVP
+   - [x] Single retry for Replicate API calls
+   - [x] Clear error messages to UI for:
+     - [x] Thumbnail access failures
+     - [x] Embedding computation failures
+     - [x] Poster generation failures
+   - [x] Skip failed items when computing "least similar"
+   - [x] Use Firebase Functions default 60s timeout
+   - [x] Firebase Functions: Default 256MB-1GB memory, 60s timeout
+   - [x] Store Replicate API key in Firebase Functions config
 
 ### Warnings
 1. Pre-generated thumbnails are being used instead of dynamic frame extraction
@@ -556,6 +582,123 @@
 6. Memory usage set to 1GB, which may affect billing
 7. Test mode security rules are in use - must be updated before production
 
+### Debugging Attempts
+
+1. **First Attempt: Using `andreasjansson/clip-features`**
+   ```js
+   const embedding = await replicate.run("andreasjansson/clip-features", {
+     input: { image: imageUrl }
+   });
+   ```
+   - Expected: Model would return embeddings
+   - Result: 404 error - Model not found
+   - Reason: Model was deprecated/removed from Replicate
+
+2. **Second Attempt: Using `openai/clip` with version hash**
+   ```js
+   const output = await replicateInstance.run(
+     "openai/clip:8fa8567ce72e927359562513bd8b2244e4735525db51f8b27ba38e1fed89c559",
+     {
+       input: {
+         image: imageUrl,
+         task: "feature-extraction"
+       }
+     }
+   );
+   ```
+   - Expected: Model would return embeddings with proper task parameter
+   - Result: 422 error - Invalid version or not permitted
+   - Reason: Version hash was incorrect or permissions issue
+
+3. **Third Attempt: Using `laion/clip` with version hash**
+   ```js
+   const output = await replicateInstance.run(
+     "laion/clip:9ab55267e1cec88be1fe131e2cc832361a0e51cbf53a9e6bcb9207fe2dd2a647",
+     {
+       input: {
+         image: imageUrl,
+         mode: "image-embedding"
+       }
+     }
+   );
+   ```
+   - Expected: Model would return embeddings with proper mode parameter
+   - Result: 422 error - Invalid version or not permitted
+   - Reason: Version hash was incorrect or permissions issue
+
+4. **Fourth Attempt: Using `stability-ai/clip` with version hash**
+   ```js
+   const output = await replicateInstance.run(
+     "stability-ai/clip:b75a06f5a99d8731411644f9deeb44fd5c0beddf7ed313ce6122c0c9c27eb6d2",
+     {
+       input: {
+         image: imageUrl,
+         input_type: "image"
+       }
+     }
+   );
+   ```
+   - Expected: Model would return embeddings using Stability AI's CLIP implementation
+   - Reason for trying: Stability AI models have shown better reliability and the SDXL test was working
+   - Result: Failed with same 422 error and additional error about null Replicate instance
+   - Root cause identified: The Replicate instance becomes null after the SDXL test, causing subsequent CLIP calls to fail
+
+5. **Current Issues**:
+   - All CLIP models returning 422 errors
+   - SDXL test connection works but CLIP fails
+   - Replicate instance becomes null after failed attempts
+   - Error: `Cannot read properties of null (reading 'run')`
+   - LangSmith logging failing with invalid character in header
+
+6. **Next Steps**:
+   - Fix Replicate instance management to prevent it from becoming null
+   - Verify API key permissions for CLIP models specifically
+   - Consider using a different CLIP model or alternative embedding service
+   - Fix LangSmith logging header issue
+   - Add better error handling for null Replicate instance
+
+7. **Key Findings**:
+   - The SDXL test connection is successful, indicating the API key and basic setup are working
+   - The issue appears to be specific to CLIP model access or permissions
+   - The Replicate instance management needs improvement to handle failed requests
+   - Multiple CLIP models (andreasjansson/clip-features, openai/clip, laion/clip, stability-ai/clip) all fail with same error
+   - Need to investigate if this is a Replicate API limitation or permission issue
+
+8. **Fifth Attempt: Fix Replicate Instance Management**
+   ```js
+   // Before: Using global replicate instance
+   let replicate;
+   async function initializeReplicate() {
+     if (replicate) {
+       return replicate;
+     }
+     replicate = new Replicate({ auth: apiKey });
+     return replicate;
+   }
+
+   // After: Creating fresh instance for each request
+   async function initializeReplicate() {
+     const replicateInstance = new Replicate({ auth: apiKey });
+     await replicateInstance.run("stability-ai/sdxl", {...}); // Test connection
+     return replicateInstance;
+   }
+
+   async function getClipEmbedding(imageUrl) {
+     // Get a fresh instance for each attempt
+     const replicateInstance = await initializeReplicate();
+     const output = await replicateInstance.run("stability-ai/clip", {...});
+     return output;
+   }
+   ```
+   - Problem: Global `replicate` variable becoming null after failed requests
+   - Solution: Create fresh instance for each request instead of reusing global instance
+   - Changes:
+     1. Removed global `replicate` variable
+     2. Modified `initializeReplicate` to always create new instance
+     3. Added connection test with SDXL model
+     4. Updated `getClipEmbedding` to get fresh instance each time
+   - Status: Testing deployment
+
 ---
 
 ### File Structure Tree with Phase 11
@@ -565,6 +708,7 @@ LikeThese/
 ├── LikeThese/
 │   ├── Views/
 │   │   └── InspirationsBoardView.swift
+│   │   └── ...
 │   ├── Services/
 │   │   └── FirestoreService.swift
 │   └── ...

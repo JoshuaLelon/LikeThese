@@ -1,9 +1,6 @@
 import Foundation
 import AVFoundation
-import os
 import FirebaseStorage
-
-private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoCacheService")
 
 class VideoCacheService {
     static let shared = VideoCacheService()
@@ -20,7 +17,7 @@ class VideoCacheService {
         cache.countLimit = 10 // Maximum number of videos to cache
         cache.totalCostLimit = 500 * 1024 * 1024 // 500MB limit
         
-        logger.debug("📼 VideoCacheService initialized at \(self.cacheDirectory.path)")
+        print("📼 VideoCacheService initialized at \(self.cacheDirectory.path)")
     }
     
     func cachedPlayerItem(for url: URL) -> AVPlayerItem? {
@@ -32,7 +29,7 @@ class VideoCacheService {
     func cacheAsset(_ asset: AVURLAsset, for url: URL) {
         let key = url.absoluteString as NSString
         cache.setObject(asset, forKey: key)
-        logger.debug("📥 Cached asset for URL: \(url)")
+        print("📥 Cached asset for URL: \(url)")
     }
     
     func preloadVideo(url: URL) async throws -> AVPlayerItem {
@@ -40,7 +37,7 @@ class VideoCacheService {
         
         // Check memory cache first
         if let cachedAsset = cache.object(forKey: cacheKey) {
-            logger.debug("✅ Found cached video in memory for URL: \(url)")
+            print("✅ Found cached video in memory for URL: \(url)")
             return AVPlayerItem(asset: cachedAsset)
         }
         
@@ -50,7 +47,7 @@ class VideoCacheService {
         
         // Check disk cache
         if fileManager.fileExists(atPath: localURL.path) {
-            logger.debug("✅ Found cached video on disk: \(localURL.path)")
+            print("✅ Found cached video on disk: \(localURL.path)")
             let asset = AVURLAsset(url: localURL)
             let playerItem = AVPlayerItem(asset: asset)
             cacheAsset(asset, for: url)
@@ -58,21 +55,21 @@ class VideoCacheService {
         }
         
         // Get Firebase Storage reference and download URL
-        logger.debug("🔑 Getting Firebase Storage signed URL for: \(url)")
+        print("🔑 Getting Firebase Storage signed URL for: \(url)")
         
         // Extract filename from URL path
         let filename = url.lastPathComponent
-        logger.debug("📄 Extracted filename: \(filename)")
+        print("📄 Extracted filename: \(filename)")
         
         // Get storage reference for video
         let storageRef = Storage.storage().reference().child("videos").child(filename)
         
         do {
             let signedURL = try await storageRef.downloadURL()
-            logger.debug("✅ Got signed URL: \(signedURL)")
+            print("✅ Got signed URL: \(signedURL)")
             
             // Download video using signed URL
-            logger.debug("📥 Downloading video using signed URL")
+            print("📥 Downloading video using signed URL")
             let (tempURL, response) = try await URLSession.shared.download(from: signedURL)
             
             guard let httpResponse = response as? HTTPURLResponse else {
@@ -92,7 +89,7 @@ class VideoCacheService {
             try? fileManager.removeItem(at: localURL) // Remove any existing file
             try fileManager.moveItem(at: tempURL, to: localURL)
             
-            logger.debug("✅ Downloaded and cached video at: \(localURL.path)")
+            print("✅ Downloaded and cached video at: \(localURL.path)")
             
             // Create asset from local file
             let asset = AVURLAsset(url: localURL)
@@ -105,7 +102,7 @@ class VideoCacheService {
                 queue: .main
             ) { notification in
                 if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
-                    logger.error("❌ Playback failed: \(error.localizedDescription)")
+                    print("❌ Playback failed: \(error.localizedDescription)")
                 }
             }
             
@@ -113,9 +110,9 @@ class VideoCacheService {
             return playerItem
             
         } catch {
-            logger.error("❌ Failed to download video: \(error.localizedDescription)")
+            print("❌ Failed to download video: \(error.localizedDescription)")
             if let nsError = error as NSError? {
-                logger.error("Error domain: \(nsError.domain), code: \(nsError.code)")
+                print("Error domain: \(nsError.domain), code: \(nsError.code)")
             }
             throw error
         }
@@ -125,7 +122,7 @@ class VideoCacheService {
         cache.removeAllObjects()
         try? fileManager.removeItem(at: cacheDirectory)
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-        logger.debug("🗑 Cleared video cache")
+        print("🗑 Cleared video cache")
     }
     
     private func cleanupOldCache() {
@@ -147,11 +144,11 @@ class VideoCacheService {
                 let filesToRemove = sortedFiles[0..<(contents.count - cache.countLimit)]
                 for fileURL in filesToRemove {
                     try? fileManager.removeItem(at: fileURL)
-                    logger.debug("🗑 Removed old cached video: \(fileURL.lastPathComponent)")
+                    print("🗑 Removed old cached video: \(fileURL.lastPathComponent)")
                 }
             }
         } catch {
-            logger.error("❌ Failed to cleanup cache: \(error.localizedDescription)")
+            print("❌ Failed to cleanup cache: \(error.localizedDescription)")
         }
     }
 } 

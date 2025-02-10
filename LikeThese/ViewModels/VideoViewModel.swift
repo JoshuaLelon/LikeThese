@@ -1,9 +1,8 @@
 import Foundation
-import os
 import FirebaseFirestore
 import SwiftUI
-
-private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoViewModel")
+import FirebaseFunctions
+import FirebaseAuth
 
 @MainActor
 class VideoViewModel: ObservableObject {
@@ -25,6 +24,9 @@ class VideoViewModel: ObservableObject {
     private var cachedThumbnails: [String: URL] = [:]
     private var lastKnownIndices: [String: Int] = [:]
     
+    // Initialize Firebase Functions with custom domain
+    private let functions = Functions.functions(region: "us-central1")
+    
     func isLoadingVideo(_ videoId: String) -> Bool {
         return loadingVideoIds.contains(videoId)
     }
@@ -38,14 +40,14 @@ class VideoViewModel: ObservableObject {
     }
     
     func loadInitialVideos() async {
-        logger.debug("📥 Starting initial video load")
+        print("📥 Starting initial video load")
         isLoading = true
         error = nil
         
         do {
             // Fetch initial videos plus buffer
             let initialVideos = try await firestoreService.fetchInitialVideos(limit: pageSize + minBufferSize)
-            logger.debug("✅ Loaded \(initialVideos.count) initial videos")
+            print("✅ Loaded \(initialVideos.count) initial videos")
             
             // Split into visible videos and buffer
             let visibleVideos = Array(initialVideos.prefix(pageSize))
@@ -58,7 +60,7 @@ class VideoViewModel: ObservableObject {
             
             videos = visibleVideos
         } catch {
-            logger.error("❌ Error loading initial videos: \(error.localizedDescription)")
+            print("❌ Error loading initial videos: \(error.localizedDescription)")
             self.error = error
         }
         
@@ -69,7 +71,7 @@ class VideoViewModel: ObservableObject {
         self.preservedState["videos"] = self.videos
         self.preservedState["videoSequence"] = self.videoSequence
         self.preservedState["lastKnownIndices"] = self.lastKnownIndices
-        logger.info("📦 STATE: Preserved current grid state with \(self.videos.count) videos")
+        print("📦 STATE: Preserved current grid state with \(self.videos.count) videos")
     }
     
     func restorePreservedState() {
@@ -81,7 +83,7 @@ class VideoViewModel: ObservableObject {
             if let indices = self.preservedState["lastKnownIndices"] as? [String: Int] {
                 self.lastKnownIndices = indices
             }
-            logger.info("📦 STATE: Restored grid state with \(self.videos.count) videos")
+            print("📦 STATE: Restored grid state with \(self.videos.count) videos")
         }
     }
     
@@ -127,7 +129,7 @@ class VideoViewModel: ObservableObject {
             }
         } catch {
             self.error = error
-            logger.error("❌ Failed to load more videos: \(error.localizedDescription)")
+            print("❌ Failed to load more videos: \(error.localizedDescription)")
         }
         isLoadingMore = false
     }
@@ -141,9 +143,9 @@ class VideoViewModel: ObservableObject {
                 let video = try await self.firestoreService.fetchRandomVideo()
                 self.videoBuffer.append(video)
             }
-            logger.info("🔄 BUFFER: Replenished video buffer to \(self.videoBuffer.count) videos")
+            print("🔄 BUFFER: Replenished video buffer to \(self.videoBuffer.count) videos")
         } catch {
-            logger.error("❌ BUFFER: Failed to replenish video buffer: \(error.localizedDescription)")
+            print("❌ BUFFER: Failed to replenish video buffer: \(error.localizedDescription)")
         }
     }
     
@@ -158,8 +160,11 @@ class VideoViewModel: ObservableObject {
         return videoSequence[index - 1]
     }
     
-    func getNextVideo(from index: Int) -> Video? {
-        return videoSequence[index + 1]
+    func getNextVideo(from currentIndex: Int) -> Video? {
+        if currentIndex + 1 < videos.count {
+            return videos[currentIndex + 1]
+        }
+        return nil
     }
     
     // Load a random video at a specific index
@@ -176,7 +181,7 @@ class VideoViewModel: ObservableObject {
     
     // Add autoplay functionality
     func appendAutoplayVideo(_ video: Video) {
-        logger.debug("📥 Appending autoplay video: \(video.id)")
+        print("📥 Appending autoplay video: \(video.id)")
         let nextIndex = videos.count
         videos.append(video)
         videoSequence[nextIndex] = video
@@ -185,20 +190,35 @@ class VideoViewModel: ObservableObject {
     // Add video removal functionality
     func removeVideo(_ videoId: String) async {
         if let index = videos.firstIndex(where: { $0.id == videoId }) {
+            replacingVideoId = videoId
+            
             do {
-                replacingVideoId = videoId
+                // Get current videos in grid as board videos
+                let boardVideos = videos
                 
-                // Try to get replacement from buffer first
-                var newVideo: Video
-                if let bufferedVideo = videoBuffer.first {
-                    newVideo = bufferedVideo
-                    videoBuffer.removeFirst()
-                } else {
-                    // Fetch new video if buffer is empty
-                    newVideo = try await firestoreService.fetchRandomVideo()
+                // Get a set of candidate videos
+                var candidateVideos: [Video] = []
+                for _ in 0..<5 {  // Get 5 candidates
+                    do {
+                        let video = try await firestoreService.fetchRandomVideo()
+                        candidateVideos.append(video)
+                    } catch {
+                        print("❌ Error fetching candidate video: \(error.localizedDescription)")
+                    }
                 }
                 
-                // Atomic update
+                // Make sure we have at least one candidate
+                guard !candidateVideos.isEmpty else {
+                    throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "No candidate videos available"])
+                }
+                
+                // Find least similar video using AI
+                let newVideo = try await findLeastSimilarVideo(
+                    boardVideos: boardVideos,
+                    candidateVideos: candidateVideos
+                )
+                
+                // Update videos array
                 var updatedVideos = videos
                 updatedVideos.remove(at: index)
                 updatedVideos.insert(newVideo, at: index)
@@ -209,22 +229,65 @@ class VideoViewModel: ObservableObject {
                 videos = updatedVideos
                 replacingVideoId = nil
                 
-                // Replenish buffer asynchronously
-                Task {
-                    if videoBuffer.count < minBufferSize {
-                        do {
-                            let newBufferVideo = try await self.firestoreService.fetchRandomVideo()
-                            videoBuffer.append(newBufferVideo)
-                        } catch {
-                            logger.error("❌ Error replenishing buffer: \(error.localizedDescription)")
-                        }
-                    }
-                }
             } catch {
                 self.error = error
                 replacingVideoId = nil
             }
         }
+    }
+    
+    func findLeastSimilarVideo(boardVideos: [Video], candidateVideos: [Video]) async throws -> Video {
+        // Add retry logic for network and auth issues
+        for attempt in 0..<3 {
+            do {
+                // Check authentication
+                guard let currentUser = Auth.auth().currentUser else {
+                    print("❌ No authenticated user found (attempt \(attempt + 1))")
+                    if attempt == 2 {
+                        throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "User must be authenticated"])
+                    }
+                    try await Task.sleep(nanoseconds: 1_000_000_000) // Wait 1 second
+                    continue
+                }
+
+                // Ensure we have a fresh token and log it
+                let token = try await currentUser.getIDToken()
+                print("🎫 Got fresh token (length: \(token.count)) for user: \(currentUser.uid)")
+                
+                let data: [String: Any] = [
+                    "boardVideos": boardVideos.map { [
+                        "id": $0.id,
+                        "thumbnailUrl": $0.thumbnailUrl ?? ""
+                    ]},
+                    "candidateVideos": candidateVideos.map { [
+                        "id": $0.id,
+                        "thumbnailUrl": $0.thumbnailUrl ?? ""
+                    ]},
+                    "auth": ["token": token]  // Pass token in request data
+                ]
+                
+                print("📤 Calling findLeastSimilarVideo with \(boardVideos.count) board videos and \(candidateVideos.count) candidates")
+                let result = try await functions.httpsCallable("findLeastSimilarVideo").call(data)
+                print("📥 Received response from findLeastSimilarVideo")
+                
+                guard let response = result.data as? [String: Any],
+                      let chosenId = response["chosen"] as? String,
+                      let chosen = candidateVideos.first(where: { $0.id == chosenId }) else {
+                    throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from findLeastSimilarVideo"])
+                }
+                
+                return chosen
+            } catch {
+                print("❌ Error in findLeastSimilarVideo (attempt \(attempt + 1)): \(error.localizedDescription)")
+                if attempt == 2 {
+                    throw error
+                }
+                try await Task.sleep(nanoseconds: 1_000_000_000) // Wait 1 second before retry
+            }
+        }
+        
+        // This should never be reached due to the throw in the loop
+        throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to find similar video after retries"])
     }
     
     func removeMultipleVideos(_ videoIds: [String]) async {
@@ -288,7 +351,7 @@ class VideoViewModel: ObservableObject {
                             videoBuffer.append(contentsOf: newBufferVideos)
                         }
                     } catch {
-                        logger.error("❌ Error replenishing buffer: \(error.localizedDescription)")
+                        print("❌ Error replenishing buffer: \(error.localizedDescription)")
                     }
                 }
             }

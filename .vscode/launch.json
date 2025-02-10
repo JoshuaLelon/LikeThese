@@ -4,15 +4,8 @@
         {
             "type": "sweetpad-lldb",
             "request": "launch",
-            "name": "Attach to running app (SweetPad)",
+            "name": "Debug iOS App",
             "preLaunchTask": "sweetpad: launch"
-        }
-    ],
-    "compounds": [
-        {
-            "name": "Clean, Build & Launch",
-            "configurations": ["Attach to running app (SweetPad)"],
-            "preLaunchTask": "sweetpad: clean-build-launch"
         }
     ]
 }

@@ -1,9 +1,6 @@
 import SwiftUI
 import AVKit
-import os
 import FirebaseFirestore
-
-private let logger = Logger(subsystem: "com.Gauntlet.LikeThese", category: "VideoPlayback")
 
 // Add safe subscript for arrays
 extension Array {
@@ -42,7 +39,7 @@ struct VideoPlaybackView: View {
         self.videos = videos
         self.videoManager = videoManager
         self.viewModel = viewModel
-        logger.info("📱 VideoPlaybackView initialized with video: \(initialVideo.id) at index: \(initialIndex), total videos: \(videos.count)")
+        print("📱 VideoPlaybackView initialized with video: \(initialVideo.id) at index: \(initialIndex), total videos: \(videos.count)")
     }
     
     var body: some View {
@@ -123,14 +120,14 @@ struct VideoPlaybackView: View {
             // Initialize state and preload immediately
             viewModel.videos = videos
             currentIndex = initialIndex
-            logger.info("📊 INITIAL STATE: Setting up \(viewModel.videos.count) videos, current index: \(initialIndex)")
+            print("📊 INITIAL STATE: Setting up \(viewModel.videos.count) videos, current index: \(initialIndex)")
             
             // Setup video completion handler first
             setupVideoCompletion()
             
             // Start playing the current video immediately
             if let url = URL(string: initialVideo.url) {
-                logger.info("🎬 Starting playback for initial video: \(initialVideo.id)")
+                print("🎬 Starting playback for initial video: \(initialVideo.id)")
                 
                 // Ensure player is ready before starting playback
                 do {
@@ -142,17 +139,17 @@ struct VideoPlaybackView: View {
                     // Start playing immediately on main thread
                     await MainActor.run {
                         videoManager.startPlaying(at: initialIndex)
-                        logger.info("▶️ Playback started for initial video at index: \(initialIndex)")
+                        print("▶️ Playback started for initial video at index: \(initialIndex)")
                     }
                     
                     // Preload the next video if available
                     if initialIndex + 1 < videos.count,
                        let nextVideoUrl = URL(string: videos[initialIndex + 1].url) {
                         try await videoManager.preloadVideo(url: nextVideoUrl, forIndex: initialIndex + 1)
-                        logger.info("🔄 Preloaded next video at index: \(initialIndex + 1)")
+                        print("🔄 Preloaded next video at index: \(initialIndex + 1)")
                     }
                 } catch {
-                    logger.error("❌ Failed to preload initial video: \(error.localizedDescription)")
+                    print("❌ Failed to preload initial video: \(error.localizedDescription)")
                     await MainActor.run {
                         errorMessage = error.localizedDescription
                         showError = true
@@ -289,7 +286,7 @@ struct VideoPlaybackView: View {
                     }
                 }
             } catch {
-                logger.error("❌ Failed to handle swipe down: \(error.localizedDescription)")
+                print("❌ Failed to handle swipe down: \(error.localizedDescription)")
                 errorMessage = error.localizedDescription
                 showError = true
                 videoManager.cleanup(context: .error)
@@ -364,7 +361,7 @@ struct VideoPlaybackView: View {
                     }
                 }
             } catch {
-                logger.error("❌ Failed to handle swipe up: \(error.localizedDescription)")
+                print("❌ Failed to handle swipe up: \(error.localizedDescription)")
                 errorMessage = error.localizedDescription
                 showError = true
                 videoManager.cleanup(context: .error)
@@ -373,18 +370,18 @@ struct VideoPlaybackView: View {
     }
     
     func setupVideoCompletion() {
-        logger.info("🔄 SYSTEM: Setting up video completion handler")
+        print("🔄 SYSTEM: Setting up video completion handler")
         videoManager.onVideoComplete = { [self] index in
-            logger.info("🎬 VIDEO COMPLETION HANDLER: Auto-advance triggered for completed video at index \(index)")
-            logger.info("📊 QUEUE POSITION: Video \(index + 1) of \(viewModel.videos.count) in queue")
+            print("🎬 VIDEO COMPLETION HANDLER: Auto-advance triggered for completed video at index \(index)")
+            print("📊 QUEUE POSITION: Video \(index + 1) of \(viewModel.videos.count) in queue")
             
             // Only cancel auto-advance if there's an active drag gesture
             guard isGestureActive && dragState else {
-                logger.info("✅ AUTO-ADVANCE: Proceeding with auto-advance for video \(index)")
+                print("✅ AUTO-ADVANCE: Proceeding with auto-advance for video \(index)")
                 return
             }
             
-            logger.info("⚠️ AUTO-ADVANCE CANCELLED: Active gesture detected during video completion at index \(index)")
+            print("⚠️ AUTO-ADVANCE CANCELLED: Active gesture detected during video completion at index \(index)")
         }
     }
 }

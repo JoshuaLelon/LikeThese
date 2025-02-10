@@ -12,15 +12,23 @@ struct ContentView: View {
                     .overlay(alignment: .topTrailing) {
                         signOutButton
                     }
+                    .onAppear {
+                        print("🔑 Auth State Check - isAuthenticated: true, currentUser: \(String(describing: Auth.auth().currentUser?.uid))")
+                    }
             } else {
                 LoginView()
+                    .onAppear {
+                        print("🔑 Auth State Check - isAuthenticated: false, currentUser: \(String(describing: Auth.auth().currentUser?.uid))")
+                    }
             }
         }
     }
     
     private var signOutButton: some View {
         Button(action: {
+            print("🔑 Sign Out Attempt - Before signOut - currentUser: \(String(describing: Auth.auth().currentUser?.uid))")
             try? authService.signOut()
+            print("🔑 Sign Out Attempt - After signOut - currentUser: \(String(describing: Auth.auth().currentUser?.uid))")
             videoManager.cleanup(context: .dismissal)
         }) {
             HStack {

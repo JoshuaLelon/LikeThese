@@ -1,43 +1,43 @@
 ## Phase 11: AI-Based "Least Similar" Video Replacement (Complete Flow)
 
 ### Overview
-We'll now specify **exact models** from [Replicate Explore](http://replicate.com/explore) and **extract the first frame** of each candidate video using `ffmpeg` at runtime. The function calls:
-
-1. **[andreasjansson/clip-features](https://replicate.com/andreasjansson/clip-features)** for embeddings.  
-2. **[google/imagen-3-fast](https://replicate.com/google/imagen-3-fast)** for text-to-image (poster image).  
+- [ ] Implement exact models from [Replicate Explore](http://replicate.com/explore) and extract first frame of each candidate video using `ffmpeg` at runtime. The function calls:
+  - [ ] **[andreasjansson/clip-features](https://replicate.com/andreasjansson/clip-features)** for embeddings.  
+  - [ ] **[google/imagen-3-fast](https://replicate.com/google/imagen-3-fast)** for text-to-image (poster image).  
 
 ### Key Implementation Details
 
 1. **Video Storage & Processing**
-   - Videos are stored in Firebase Storage
-   - Videos are TikTok-style format (1080×1920), under ~30 seconds
-   - First frames will be generated at runtime, stored temporarily in `/tmp` (512MB limit)
-   - Clean up temporary files immediately after embedding computation
+   - [ ] Videos are stored in Firebase Storage
+   - [ ] Videos are TikTok-style format (1080×1920), under ~30 seconds
+   - [ ] First frames will be generated at runtime, stored temporarily in `/tmp` (512MB limit)
+   - [ ] Clean up temporary files immediately after embedding computation
 
 2. **Scale & Performance**
-   - MVP level implementation - handling 1 request every few seconds max
-   - Board size is fixed at 4 videos (see USER_STORIES.md)
-   - Process all available videos as candidates (excluding current board videos)
-   - No caching implementation for now
-   - Response time: A few seconds is acceptable for MVP
+   - [ ] MVP level implementation - handling 1 request every few seconds max
+   - [ ] Board size is fixed at 4 videos (see USER_STORIES.md)
+   - [ ] Process all available videos as candidates (excluding current board videos)
+   - [ ] No caching implementation for now
+   - [ ] Response time: A few seconds is acceptable for MVP
 
 3. **Error Handling**
-   - Single retry for Replicate API calls
-   - Clear error messages to UI for:
-     - Frame extraction failures
-     - Embedding computation failures
-     - Poster generation failures
-   - Skip failed items when computing "least similar"
-   - Use Firebase Functions default 60s timeout
+   - [ ] Single retry for Replicate API calls
+   - [ ] Clear error messages to UI for:
+     - [ ] Frame extraction failures
+     - [ ] Embedding computation failures
+     - [ ] Poster generation failures
+   - [ ] Skip failed items when computing "least similar"
+   - [ ] Use Firebase Functions default 60s timeout
 
 4. **Infrastructure Requirements**
-   - Firebase Functions: Default 256MB-1GB memory, 60s timeout
-   - Custom Docker build needed for ffmpeg
-   - Store Replicate API key in Firebase Functions config
+   - [ ] Firebase Functions: Default 256MB-1GB memory, 60s timeout
+   - [ ] Custom Docker build needed for ffmpeg
+   - [ ] Store Replicate API key in Firebase Functions config
 
-### Checklist
+### Implementation Steps
 
 1. **Update Embedding & Poster Image Steps**
+   - [ ] Update `getClipEmbedding` implementation:
 
    > **Before** (original pseudo-code snippet in `candidateFlow`):
    ```js
@@ -59,6 +59,8 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
      return embedding;
    }
    ```
+
+   - [ ] Update `generatePosterImage` implementation:
 
    > **Before** (poster generation):
    ```js
@@ -85,8 +87,7 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
    ```
 
 2. **Extract the First Frame Dynamically**  
-
-   - In the **`extractFrames`** (or renamed `extractSingleFrame`) helper, we only grab the beginning frame:
+   - [ ] Implement the `extractSingleFrame` helper:
    ```js
    const { spawn } = require("child_process");
    const fs = require("fs");
@@ -113,13 +114,14 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
    }
    ```
 
-   - Update your main flow to:
+   - [ ] Update your main flow to:
      1. **Download** or reference the video by `videoUrl`.  
      2. Call `extractSingleFrame(videoUrl, "./temp.jpg")`.  
      3. Pass `"./temp.jpg"` to `getClipEmbedding`.  
      4. Delete `temp.jpg` after embedding is done (avoid storing).
 
 3. **Function Configuration**
+   - [ ] Set up memory and timeout:
    ```bash
    # Set memory and timeout
    firebase functions:config:set memory=1GB timeout=60s
@@ -129,13 +131,13 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
    ```
 
 4. **Implementation Notes**
-   - Validate input URLs point to Firebase Storage
-   - Log to LangSmith:
-     - Inputs (board vs. candidate data)
-     - Chosen result and distances
-     - Total runtime
-     - Embedding retrieval times
-   - Response format:
+   - [ ] Validate input URLs point to Firebase Storage
+   - [ ] Log to LangSmith:
+     - [ ] Inputs (board vs. candidate data)
+     - [ ] Chosen result and distances
+     - [ ] Total runtime
+     - [ ] Embedding retrieval times
+   - [ ] Set up response format:
      ```typescript
      interface Response {
        chosen: string;      // video ID
@@ -143,10 +145,10 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
        posterImageUrl?: string; // optional poster URL
      }
      ```
-   - Poster image should match vertical video format (1080×1920)
+   - [ ] Configure poster image for vertical format (1080×1920)
 
-5. **Error Messages**
-   Keep error messages simple but informative:
+5. **Error Message System**
+   - [ ] Implement error constants:
    ```typescript
    const ERROR_MESSAGES = {
      FRAME_EXTRACTION: "Failed to extract video frame",
@@ -156,19 +158,19 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
    };
    ```
 
-6. **Confirm Flow Matches Diagram**
-   - **ExtractFrames** → `extractSingleFrame` with `ffmpeg`.  
-   - **ComputeEmbeddings** → `andreasjansson/clip-features`.  
-   - **CompareEmbeddings** → `cosineDistance` loop.  
-   - **PickLeastSimilar** → Highest sum of distances.  
-   - **GeneratePosterImage** → `google/imagen-3-fast`.  
-   - **LogRun** → `axios.post` to LangSmith.  
-   - **ReturnVideoID** → `res.json(...)`.  
-   - **UpdateGrid** → Handled in Swift app.
+6. **Flow Implementation**
+   - [ ] ExtractFrames → `extractSingleFrame` with `ffmpeg`
+   - [ ] ComputeEmbeddings → `andreasjansson/clip-features`
+   - [ ] CompareEmbeddings → `cosineDistance` loop
+   - [ ] PickLeastSimilar → Highest sum of distances
+   - [ ] GeneratePosterImage → `google/imagen-3-fast`
+   - [ ] LogRun → `axios.post` to LangSmith
+   - [ ] ReturnVideoID → `res.json(...)`
+   - [ ] UpdateGrid → Handled in Swift app
 
 7. **Project & Dependencies**  
-   - [ ] Go to your `functions` folder (created in earlier phases).  
-   - [ ] Install Replicate (for embeddings and text-to-image) and a request library for LangSmith:
+   - [ ] Go to your `functions` folder (created in earlier phases)
+   - [ ] Install dependencies:
      ```bash
      npm install replicate axios
      ```
@@ -179,14 +181,14 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
      ```bash
      firebase functions:config:set replicate.api_key="YOUR_REPLICATE_TOKEN"
      ```
-   - [ ] Configure any **LangSmith** endpoints/keys if needed (see their docs). For example:
+   - [ ] Configure **LangSmith** endpoints/keys:
      ```bash
      firebase functions:config:set langsmith.base_url="https://api.langsmith.com"
      firebase functions:config:set langsmith.api_key="YOUR_LANGSMITH_TOKEN"
      ```
 
 9. **Implement "CandidateFlow" as a Single Cloud Function**  
-   Create/update `functions/index.js` (or `functions/src/index.ts`), ensuring all steps match **FLOW_DIAGRAM.md**:
+   - [ ] Create/update `functions/index.js` (or `functions/src/index.ts`):
 
    <details>
    <summary>Sample Code (Node.js)</summary>
@@ -329,7 +331,7 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
       ```bash
       firebase deploy --only functions
       ```
-    - [ ] Send a test request from **Postman** or **Swift**:
+    - [ ] Test with sample request:
       ```json
       {
         "boardVideos": [
@@ -343,41 +345,40 @@ We'll now specify **exact models** from [Replicate Explore](http://replicate.com
         "textPrompt": "A whimsical poster summarizing a cat and dog playing"
       }
       ```
-    - [ ] Confirm the response includes:
+    - [ ] Verify response includes:
       1. `chosenVideo`  
       2. `distanceScore`  
       3. `posterImageUrl` if `textPrompt` was given  
 
 11. **Swift Integration**  
-    - [ ] In your app's "Swipe Up" flow (see `FLOW_DIAGRAM.md`), call `POST` or use `Functions.httpsCallable("candidateFlow")`.
-    - [ ] Once you receive `{ chosenVideo, posterImageUrl }`, replace the grid's video with `chosenVideo` and optionally display the "poster" in your UI.
+    - [ ] In your app's "Swipe Up" flow (see `FLOW_DIAGRAM.md`), implement `POST` or use `Functions.httpsCallable("candidateFlow")`
+    - [ ] Once you receive `{ chosenVideo, posterImageUrl }`, replace the grid's video with `chosenVideo` and optionally display the "poster" in your UI
 
 12. **Validation of Diagram Steps**  
-    - **ExtractFrames**: Provided as an optional function if you need dynamic frame generation.  
-    - **ComputeEmbeddings**: Done with `getClipEmbedding()`.  
-    - **CompareEmbeddings**: The loop with `cosineDistance()`.  
-    - **PickLeastSimilar**: The highest total distance.  
-    - **GeneratePosterImage**: The `generatePosterImage()` function with text prompt.  
-    - **LogRun**: The `axios.post()` call to LangSmith.  
-    - **ReturnVideoID**: The `res.json({ chosenVideo, ... })` in the function response.  
-    - **UpdateGrid**: Handled in Swift once the function response is received.
+    - [ ] ExtractFrames: Test dynamic frame generation
+    - [ ] ComputeEmbeddings: Verify with `getClipEmbedding()`
+    - [ ] CompareEmbeddings: Test `cosineDistance()` loop
+    - [ ] PickLeastSimilar: Verify highest distance selection
+    - [ ] GeneratePosterImage: Test with text prompt
+    - [ ] LogRun: Verify `axios.post()` to LangSmith
+    - [ ] ReturnVideoID: Check `res.json()` response
+    - [ ] UpdateGrid: Test Swift integration
 
 13. **Troubleshooting**
-    - If you see an error like **"ModuleNotFoundError: ffmpeg or replicate**:  
-      - Double-check your `npm install replicate axios`.  
-    - If the function times out:  
-      - Increase the function's [timeout settings](https://firebase.google.com/docs/functions/manage-functions#set_timeout_and_memory_allocation).  
-    - If LangSmith logging fails:  
-      - Confirm you used the right `base_url` and `api_key`.
+    - [ ] Handle "ModuleNotFoundError: ffmpeg or replicate":
+      - Double-check `npm install replicate axios`
+    - [ ] Handle function timeouts:
+      - Check [timeout settings](https://firebase.google.com/docs/functions/manage-functions#set_timeout_and_memory_allocation)
+    - [ ] Fix LangSmith logging:
+      - Verify `base_url` and `api_key`
 
-14. **Wrap-Up**  
-    With these steps, **FLOW_DIAGRAM.md** is fully realized in Node-based Firebase Functions. You'll have:
-    1. **Frame extraction** (optional).  
-    2. **Embedding** with Replicate.  
-    3. **Distance-based** "least similar" selection.  
-    4. **Poster image** generation.  
-    5. **LangSmith** logging.  
-    6. **Clean return** to iOS.
+14. **Final Verification**  
+    - [ ] Frame extraction working
+    - [ ] Embedding with Replicate successful
+    - [ ] Distance-based "least similar" selection accurate
+    - [ ] Poster image generation working
+    - [ ] LangSmith logging complete
+    - [ ] Clean return to iOS functioning
 
 ---
 

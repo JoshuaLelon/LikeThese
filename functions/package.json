@@ -1,0 +1,25 @@
+{
+  "name": "functions",
+  "version": "1.0.0",
+  "description": "Firebase Functions for LikeThese app",
+  "main": "index.js",
+  "scripts": {
+    "start": "firebase-functions-framework",
+    "deploy": "firebase deploy --only functions",
+    "serve": "firebase emulators:start --only functions"
+  },
+  "engines": {
+    "node": "18"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "firebase-admin": "^11.11.1",
+    "firebase-functions": "^6.3.1",
+    "langchain": "^0.3.15",
+    "replicate": "^0.25.1"
+  },
+  "private": true
+}

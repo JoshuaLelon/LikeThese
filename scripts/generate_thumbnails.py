@@ -1,6 +1,5 @@
 import os
 import json
-from openai import OpenAI
 from pathlib import Path
 import time
 from typing import List, Dict
@@ -11,13 +10,12 @@ import requests
 from io import BytesIO
 import signal
 import sys
+import replicate
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Constants
-DALLE_WIDTH = 1024
-DALLE_HEIGHT = 1792
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 
@@ -42,21 +40,39 @@ def get_video_title(video_path: Path) -> str:
     title = video_path.stem.replace('_', ' ').replace('-', ' ')
     return title.title()  # Capitalize first letter of each word
 
-def generate_prompt(video_title: str) -> str:
-    """Generate a DALL-E prompt based on the video title."""
-    # Special case for the problematic prompt
-    if video_title.lower() == "man rubbing calves":
-        return "Create a vertical thumbnail for a fitness video about leg muscle recovery. Show a professional fitness setting with exercise equipment and recovery tools. Make it suitable for mobile viewing in portrait orientation with vibrant colors and clear focal points."
-    
-    return f"Create a vertical thumbnail for a TikTok-style video titled '{video_title}'. The image should be eye-catching and modern, with vibrant colors and clear focal points. Make it suitable for mobile viewing in portrait orientation. Ensure the composition works well in a 9:16 aspect ratio."
+def generate_prompt(title: str) -> str:
+    """Generate a prompt for the thumbnail based on video title."""
+    return f"A cinematic, high-quality thumbnail for a video titled '{title}'. Vertical format, TikTok style, 1080x1920."
 
-def resize_image(image_data: bytes, target_size: tuple[int, int]) -> Image.Image:
+def resize_image(image_content: bytes, target_size: tuple[int, int]) -> Image.Image:
     """Resize image to target size while maintaining aspect ratio."""
-    img = Image.open(BytesIO(image_data))
-    return img.resize(target_size, Image.Resampling.LANCZOS)
+    image = Image.open(BytesIO(image_content))
+    image = image.convert('RGB')
+    
+    # Calculate dimensions preserving aspect ratio
+    aspect_ratio = target_size[0] / target_size[1]
+    current_ratio = image.width / image.height
+    
+    if current_ratio > aspect_ratio:
+        new_height = image.height
+        new_width = int(aspect_ratio * new_height)
+    else:
+        new_width = image.width
+        new_height = int(new_width / aspect_ratio)
+    
+    # Crop to center
+    left = (image.width - new_width) // 2
+    top = (image.height - new_height) // 2
+    right = left + new_width
+    bottom = top + new_height
+    
+    image = image.crop((left, top, right, bottom))
+    image = image.resize(target_size, Image.Resampling.LANCZOS)
+    
+    return image
 
-def generate_thumbnails(client: OpenAI, video_paths: List[Path], thumbnails_dir: Path):
-    """Generate thumbnails for each video using DALL-E 3."""
+def generate_thumbnails(client: replicate.Client, video_paths: List[Path], thumbnails_dir: Path):
+    """Generate thumbnails for each video using Replicate's imagen-3-fast."""
     for video_path in video_paths:
         try:
             # Check if thumbnail already exists
@@ -70,53 +86,46 @@ def generate_thumbnails(client: OpenAI, video_paths: List[Path], thumbnails_dir:
             
             print(f"\nGenerating thumbnail for: {video_title}")
             
-            response = client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                size=f"{DALLE_WIDTH}x{DALLE_HEIGHT}",
-                quality="standard",
-                n=1,
+            # Use Replicate's imagen-3-fast model
+            output = client.run(
+                "google/imagen-3-fast",
+                input={
+                    "prompt": prompt,
+                    "width": TARGET_WIDTH,
+                    "height": TARGET_HEIGHT
+                }
             )
             
             # Download the image
-            image_url = response.data[0].url
+            image_url = output[0] if isinstance(output, list) else output
             image_response = requests.get(image_url)
             image_response.raise_for_status()
             
-            # Resize the image
-            resized_image = resize_image(
-                image_response.content, 
-                (TARGET_WIDTH, TARGET_HEIGHT)
-            )
-            
-            # Save the resized image with the video name
-            resized_image.save(thumbnail_path, "PNG")
+            # Save the image directly (no need to resize as we specified dimensions)
+            with open(thumbnail_path, 'wb') as f:
+                f.write(image_response.content)
             
             print(f"✓ Generated thumbnail for {video_title}")
             
             # Sleep to respect rate limits
             time.sleep(1)
             
-        except KeyboardInterrupt:
-            print("\n\nGracefully stopping... (This might take a few seconds)")
-            sys.exit(0)
         except Exception as e:
-            print(f"Error generating thumbnail for {video_title}: {str(e)}")
-            continue
+            print(f"\n❌ Failed to generate thumbnail for {video_title}: {str(e)}")
 
 def main():
     try:
-        parser = argparse.ArgumentParser(description='Generate video thumbnails using DALL-E 3')
-        parser.add_argument('--api-key', help='OpenAI API key')
+        parser = argparse.ArgumentParser(description='Generate video thumbnails using Replicate')
+        parser.add_argument('--api-key', help='Replicate API key')
         args = parser.parse_args()
         
         # Get API key from args, environment, or .env file
-        api_key = args.api_key or os.getenv('OPENAI_API_KEY')
+        api_key = args.api_key or os.getenv('REPLICATE_API_TOKEN')
         if not api_key:
-            raise ValueError("OpenAI API key must be provided via --api-key argument or OPENAI_API_KEY in .env file")
+            raise ValueError("Replicate API key must be provided via --api-key argument or REPLICATE_API_TOKEN in .env file")
         
-        # Initialize OpenAI client
-        client = OpenAI(api_key=api_key)
+        # Initialize Replicate client
+        client = replicate.Client(api_token=api_key)
         
         # Setup directories
         videos_dir, thumbnails_dir = setup_directories()

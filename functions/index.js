@@ -3,6 +3,7 @@ const functions = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 const Replicate = require("replicate");
 const axios = require("axios");
+const { Client } = require("langsmith");
 const config = require("./config");
 
 admin.initializeApp();
@@ -22,6 +23,36 @@ const langsmithBaseUrl = defineSecret('LANGSMITH_BASE_URL_SECRET');
 
 // Cache for CLIP embeddings
 const clipEmbeddingCache = new Map();
+
+// Initialize LangSmith client
+let langsmithClient = null;
+
+async function initializeLangSmith() {
+  if (!langsmithClient) {
+    try {
+      const apiKey = langsmithApiKey.value()?.trim();
+      if (!apiKey) {
+        console.log("No LangSmith API key configured, skipping logging");
+        return null;
+      }
+
+      console.log("🔄 Initializing LangSmith client...");
+      const baseUrl = "https://api.smith.langchain.com";
+      
+      langsmithClient = new Client({
+        apiKey,
+        apiUrl: baseUrl,
+        projectName: "LikeThese"
+      });
+      console.log("✅ Initialized LangSmith client");
+    } catch (error) {
+      console.error("❌ Failed to initialize LangSmith:", error);
+      console.error("Cause:", error.cause || "No cause available");
+      return null;
+    }
+  }
+  return langsmithClient;
+}
 
 // Batch fetch embeddings from Firestore
 async function batchFetchEmbeddings(videoIds) {
@@ -381,45 +412,43 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     metrics.totalRuntime = Date.now() - startTime;
 
     // Log to LangSmith if configured
-    const apiKey = langsmithApiKey.value();
-    if (apiKey) {
-      try {
-        const baseUrl = langsmithBaseUrl.value().trim();
-        const payload = {
-          name: "VideoReplacementFlow",
-          inputs: {
-            boardVideos: boardVideos.map(v => ({ id: v.id, thumbnailUrl: v.thumbnailUrl })),
-            candidateVideos: candidateVideos.map(v => ({ id: v.id, thumbnailUrl: v.thumbnailUrl })),
-            textPrompt: request.data.textPrompt
-          },
-          outputs: {
-            chosen: bestVideoId,
-            score: bestScore,
-            posterImageUrl,
-            metrics: {
-              ...metrics,
-              distanceCalculationTime: distanceTime,
-              posterGenerationTime: posterTime,
-              distances
-            }
-          }
-        };
-
-        await axios.post(
-          baseUrl,
-          payload,
-          {
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${apiKey.trim()}`
+    try {
+      const client = await initializeLangSmith();
+      if (client) {
+        try {
+          console.log("🔄 Logging run to LangSmith...");
+          await client.createRun({
+            name: "VideoReplacementFlow",
+            run_type: "chain",
+            project_name: "LikeThese",
+            inputs: {
+              boardVideos: boardVideos.map(v => ({ id: v.id, thumbnailUrl: v.thumbnailUrl })),
+              candidateVideos: candidateVideos.map(v => ({ id: v.id, thumbnailUrl: v.thumbnailUrl })),
+              textPrompt: request.data.textPrompt
             },
-            timeout: 5000 // 5 second timeout
-          }
-        );
-      } catch (logError) {
-        // Don't let LangSmith errors affect the main function
-        console.error("Failed to log to LangSmith:", logError.message);
+            outputs: {
+              chosen: bestVideoId,
+              score: bestScore,
+              posterImageUrl,
+              metrics: {
+                ...metrics,
+                distanceCalculationTime: distanceTime,
+                posterGenerationTime: posterTime,
+                distances
+              }
+            },
+            start_time: new Date(startTime).toISOString(),
+            end_time: new Date().toISOString(),
+            error: null
+          });
+          console.log("✅ Successfully logged to LangSmith");
+        } catch (logError) {
+          console.error("❌ Failed to log run to LangSmith:", logError);
+          console.error("Cause:", logError.cause || "No cause available");
+        }
       }
+    } catch (error) {
+      console.error("❌ Failed to initialize LangSmith:", error);
     }
 
     return {
@@ -433,34 +462,32 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     metrics.error = error.message;
 
     // Log error to LangSmith if configured
-    const apiKey = langsmithApiKey.value();
-    if (apiKey) {
-      try {
-        const baseUrl = langsmithBaseUrl.value().trim();
-        const payload = {
-          name: "VideoReplacementFlow",
-          inputs: request.data,
-          outputs: {
-            error: error.message,
-            metrics
-          }
-        };
-
-        await axios.post(
-          baseUrl,
-          payload,
-          {
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${apiKey.trim()}`
+    try {
+      const client = await initializeLangSmith();
+      if (client) {
+        try {
+          console.log("🔄 Logging error to LangSmith...");
+          await client.createRun({
+            name: "VideoReplacementFlow",
+            run_type: "chain",
+            project_name: "LikeThese",
+            inputs: request.data,
+            outputs: {
+              error: error.message,
+              metrics
             },
-            timeout: 5000 // 5 second timeout
-          }
-        );
-      } catch (logError) {
-        // Don't let LangSmith errors affect the main function
-        console.error("Failed to log error to LangSmith:", logError.message);
+            start_time: new Date(startTime).toISOString(),
+            end_time: new Date().toISOString(),
+            error: error.message
+          });
+          console.log("✅ Successfully logged error to LangSmith");
+        } catch (logError) {
+          console.error("❌ Failed to log error to LangSmith:", logError);
+          console.error("Cause:", logError.cause || "No cause available");
+        }
       }
+    } catch (error) {
+      console.error("❌ Failed to initialize LangSmith:", error);
     }
 
     console.error("Error in findLeastSimilarVideo:", error);

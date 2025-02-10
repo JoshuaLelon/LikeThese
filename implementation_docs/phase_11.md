@@ -1,7 +1,7 @@
 ## Phase 11: AI-Based "Least Similar" Video Replacement (Complete Flow)
 
 ### Overview
-- [PROGRESS] Implement exact models from [Replicate Explore](http://replicate.com/explore) and use pre-generated thumbnails for CLIP embeddings. The function calls:
+- [x] Implement exact models from [Replicate Explore](http://replicate.com/explore) and use pre-generated thumbnails for CLIP embeddings. The function calls:
   - [x] **[andreasjansson/clip-features](https://replicate.com/andreasjansson/clip-features)** for embeddings.  
   - [x] **[google/imagen-3-fast](https://replicate.com/google/imagen-3-fast)** for text-to-image (poster image).  
 
@@ -159,7 +159,7 @@
      firebase functions:config:get
      # Result: {
      #   "replicate": {
-     #     "api_key": "r8_V1q7ztXqRLFYlZoj6MU2arqhjrsB3Cq3XsoEg"
+     #     "api_key": "REDACTED"
      #   }
      # }
      ```
@@ -197,7 +197,7 @@
      # Result: Added langchain to package.json
 
      # 1. First attempt - Setting up config with environment variables:
-     firebase functions:config:set langsmith.base_url="https://api.langsmith.com" langsmith.api_key="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"
+     firebase functions:config:set langsmith.base_url="https://api.langsmith.com" langsmith.api_key="REDACTED"
      # Result: ✔ Functions config updated.
 
      # 2. First attempt - Set up project name:
@@ -209,8 +209,8 @@
      # Result: Operation finished successfully.
 
      # 4. First attempt - Create secrets (failed due to naming conflict):
-     echo "r8_V1q7ztXqRLFYlZoj6MU2arqhjrsB3Cq3XsoEg" | gcloud secrets create REPLICATE_API_KEY --data-file=-
-     echo "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" | gcloud secrets create LANGSMITH_API_KEY --data-file=-
+     echo "REDACTED" | gcloud secrets create REPLICATE_API_KEY --data-file=-
+     echo "REDACTED" | gcloud secrets create LANGSMITH_API_KEY --data-file=-
      echo "https://api.langsmith.com" | gcloud secrets create LANGSMITH_BASE_URL --data-file=-
      # Result: Created secrets but deployment failed due to naming conflicts
 
@@ -222,8 +222,8 @@
      gcloud secrets delete REPLICATE_API_KEY --quiet
      gcloud secrets delete LANGSMITH_API_KEY --quiet
      gcloud secrets delete LANGSMITH_BASE_URL --quiet
-     echo "r8_V1q7ztXqRLFYlZoj6MU2arqhjrsB3Cq3XsoEg" | gcloud secrets create REPLICATE_API_KEY_SECRET --data-file=-
-     echo "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" | gcloud secrets create LANGSMITH_API_KEY_SECRET --data-file=-
+     echo "REDACTED" | gcloud secrets create REPLICATE_API_KEY_SECRET --data-file=-
+     echo "REDACTED" | gcloud secrets create LANGSMITH_API_KEY_SECRET --data-file=-
      echo "https://api.langsmith.com" | gcloud secrets create LANGSMITH_BASE_URL_SECRET --data-file=-
      # Result: Successfully created secrets with new names
 
@@ -270,8 +270,8 @@
      # Result: Operation finished successfully.
 
      # 2. Create secrets with proper naming:
-     echo "r8_V1q7ztXqRLFYlZoj6MU2arqhjrsB3Cq3XsoEg" | gcloud secrets create REPLICATE_API_KEY_SECRET --data-file=-
-     echo "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" | gcloud secrets create LANGSMITH_API_KEY_SECRET --data-file=-
+     echo "REDACTED" | gcloud secrets create REPLICATE_API_KEY_SECRET --data-file=-
+     echo "REDACTED" | gcloud secrets create LANGSMITH_API_KEY_SECRET --data-file=-
      echo "https://api.langsmith.com" | gcloud secrets create LANGSMITH_BASE_URL_SECRET --data-file=-
      # Result: Created version [1] of each secret
 
@@ -292,7 +292,7 @@
      # Result: Successfully deployed with secret access
      ```
 
-   - [ ] Set up response format:
+   - [x] Set up response format:
      ```typescript
      interface Response {
        chosen: string;      // video ID
@@ -300,7 +300,7 @@
        posterImageUrl?: string; // optional poster URL
      }
      ```
-   - [ ] Configure poster image for vertical format (1080×1920)
+   - [x] Configure poster image for vertical format (1080×1920)
 
 5. **Error Message System**
    - [ ] Implement error constants:
@@ -334,12 +334,11 @@
 8. **Environment Variables**  
    - [ ] Configure your **Replicate** API key:
      ```bash
-     firebase functions:config:set replicate.api_key="YOUR_REPLICATE_TOKEN"
+     firebase functions:config:set replicate.api_key="REDACTED"
      ```
    - [ ] Configure **LangSmith** endpoints/keys:
      ```bash
-     firebase functions:config:set langsmith.base_url="https://api.langsmith.com"
-     firebase functions:config:set langsmith.api_key="YOUR_LANGSMITH_TOKEN"
+     firebase functions:config:set langsmith.base_url="https://api.langsmith.com" langsmith.api_key="REDACTED"
      ```
 
 9. **Implement "CandidateFlow" as a Single Cloud Function**  
@@ -547,6 +546,15 @@
    - [ ] Use Firebase Functions default 60s timeout
    - [ ] Firebase Functions: Default 256MB-1GB memory, 60s timeout
    - [ ] Store Replicate API key in Firebase Functions config
+
+### Warnings
+1. Pre-generated thumbnails are being used instead of dynamic frame extraction
+2. Using Secret Manager for API keys instead of Firebase Functions config
+3. Function requires Firebase Authentication for access
+4. Response time may vary based on Replicate API performance
+5. Single retry with 1-second delay for Replicate API calls
+6. Memory usage set to 1GB, which may affect billing
+7. Test mode security rules are in use - must be updated before production
 
 ---
 

@@ -6,6 +6,14 @@ const axios = require("axios");
 
 admin.initializeApp();
 
+// Define error messages
+const ERROR_MESSAGES = {
+  FRAME_EXTRACTION: "Failed to extract video frame",
+  EMBEDDING: "Failed to compute video similarity",
+  POSTER: "Failed to generate poster image",
+  GENERAL: "Failed to process video request"
+};
+
 // Define config parameters
 const replicateApiKey = defineSecret('REPLICATE_API_KEY_SECRET');
 const langsmithApiKey = defineSecret('LANGSMITH_API_KEY_SECRET');
@@ -56,22 +64,47 @@ async function getClipEmbedding(imageUrl) {
       `Invalid Firebase Storage URL: ${imageUrl}`
     );
   }
-  const embedding = await replicate.run("andreasjansson/clip-features", {
-    input: { image: imageUrl }
-  });
-  return embedding;
+  
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const embedding = await replicate.run("andreasjansson/clip-features", {
+        input: { image: imageUrl }
+      });
+      return embedding;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) {
+        console.warn(`Retrying CLIP embedding for ${imageUrl} after error:`, error);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
+      }
+    }
+  }
+  throw new functions.https.HttpsError('internal', ERROR_MESSAGES.EMBEDDING, lastError);
 }
 
 // Generate poster image using Imagen
 async function generatePosterImage(prompt) {
-  const out = await replicate.run("google/imagen-3-fast", {
-    input: {
-      prompt,
-      width: 1080,
-      height: 1920
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const out = await replicate.run("google/imagen-3-fast", {
+        input: {
+          prompt,
+          width: 1080,
+          height: 1920
+        }
+      });
+      return out[0] || null;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) {
+        console.warn(`Retrying poster generation for prompt "${prompt}" after error:`, error);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
+      }
     }
-  });
-  return out[0] || null;
+  }
+  throw new functions.https.HttpsError('internal', ERROR_MESSAGES.POSTER, lastError);
 }
 
 // Compute cosine distance between two vectors
@@ -184,7 +217,7 @@ exports.findLeastSimilarVideo = functions.https.onCall({
               textPrompt
             },
             outputs: {
-              chosenVideo: bestVideoId,
+              chosen: bestVideoId,
               score: bestScore,
               posterImageUrl,
               metrics: {
@@ -208,7 +241,7 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     }
 
     return {
-      chosenVideo: bestVideoId,
+      chosen: bestVideoId,
       score: bestScore,
       posterImageUrl
     };
@@ -244,6 +277,10 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     }
 
     console.error("Error in findLeastSimilarVideo:", error);
-    throw new functions.https.HttpsError("internal", error.message);
+    // If it's not already an HttpsError, wrap it in one
+    if (!(error instanceof functions.https.HttpsError)) {
+      error = new functions.https.HttpsError('internal', ERROR_MESSAGES.GENERAL, error);
+    }
+    throw error;
   }
 }); 

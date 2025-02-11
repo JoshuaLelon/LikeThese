@@ -23,6 +23,7 @@ struct VideoPlaybackView: View {
     @State private var transitionState: TransitionState = .none
     @State private var transitionOpacity: Double = 1
     @State private var incomingOffset: CGFloat = 0
+    @State private var isFullscreen = false
     
     private enum TransitionState {
         case none
@@ -301,8 +302,14 @@ struct VideoPlaybackView: View {
                     }
                 }
                 
-                // Try to get next video and preload upcoming videos
-                if let nextVideo = viewModel.getNextVideo(from: current),
+                // Try to get next video from sorted queue if in fullscreen
+                let nextVideo = if isFullscreen {
+                    try await viewModel.getNextSortedVideo()
+                } else {
+                    viewModel.getNextVideo(from: current)
+                }
+                
+                if let nextVideo = nextVideo,
                    let url = URL(string: nextVideo.url) {
                     // Ensure next video is preloaded and ready
                     try await videoManager.preloadVideo(url: url, forIndex: current + 1)
@@ -316,25 +323,16 @@ struct VideoPlaybackView: View {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         offset = -UIScreen.main.bounds.height  // Move current video up
                         incomingOffset = 0  // Bring new video to center
-                        transitionOpacity = 1  // Fade in new video
+                        transitionOpacity = 1
                     }
                     
-                    // Wait for animation to complete
-                    try await Task.sleep(nanoseconds: 300_000_000)
-                    
-                    // Start playing new video only after animation
-                    if let player = videoManager.player(for: current + 1) {
-                        player.playImmediately(atRate: 1.0)
-                        videoManager.startPlaying(at: current + 1)
-                    }
-                    
-                    // Capture videoManager before MainActor.run
-                    let manager = videoManager
+                    // Update state after animation
+                    try? await Task.sleep(nanoseconds: UInt64(0.3 * Double(NSEC_PER_SEC)))
                     await MainActor.run {
                         currentIndex = current + 1
                         transitionState = .none
-                        offset = 0  // Reset offset for next interaction
-                        manager.finishTransition(at: current + 1)
+                        offset = 0
+                        videoManager.finishTransition(at: current + 1)
                     }
                     
                     // Preload next 12 videos in background

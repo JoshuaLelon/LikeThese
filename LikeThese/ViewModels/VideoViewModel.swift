@@ -31,6 +31,9 @@ class VideoViewModel: ObservableObject {
     
     private var currentBoardVideos: [LikeTheseVideo] = []
     
+    private var sortedCandidates: [(videoId: String, distance: Double)] = []
+    private var nextVideoIndex: Int = 0
+    
     func isLoadingVideo(_ videoId: String) -> Bool {
         return loadingVideoIds.contains(videoId)
     }
@@ -205,7 +208,9 @@ class VideoViewModel: ObservableObject {
                 for _ in 0..<5 {  // Get 5 candidates
                     do {
                         let video = try await firestoreService.fetchRandomVideo()
-                        candidateVideos.append(video)
+                        if !videos.contains(where: { $0.id == video.id }) {
+                            candidateVideos.append(video)
+                        }
                     } catch {
                         print("❌ Error fetching candidate video: \(error.localizedDescription)")
                     }
@@ -222,16 +227,18 @@ class VideoViewModel: ObservableObject {
                     candidateVideos: candidateVideos
                 )
                 
-                // Update videos array
+                // Update videos array atomically
                 await MainActor.run {
                     var updatedVideos = videos
-                    updatedVideos.remove(at: index)
-                    updatedVideos.insert(newVideo, at: index)
-                    
-                    // Update sequence
-                    videoSequence[index] = newVideo
-                    
-                    videos = updatedVideos
+                    if let removeIndex = updatedVideos.firstIndex(where: { $0.id == videoId }) {
+                        updatedVideos.remove(at: removeIndex)
+                        updatedVideos.insert(newVideo, at: removeIndex)
+                        
+                        // Update sequence
+                        videoSequence[removeIndex] = newVideo
+                        
+                        videos = updatedVideos
+                    }
                     replacingVideoId = nil
                 }
                 
@@ -265,13 +272,15 @@ class VideoViewModel: ObservableObject {
                 let data: [String: Any] = [
                     "boardVideos": boardVideos.map { [
                         "id": $0.id,
-                        "thumbnailUrl": $0.thumbnailUrl ?? ""
+                        "thumbnailUrl": $0.thumbnailUrl ?? "",
+                        "frameUrl": $0.frameUrl ?? $0.thumbnailUrl ?? ""
                     ]},
                     "candidateVideos": candidateVideos.map { [
                         "id": $0.id,
-                        "thumbnailUrl": $0.thumbnailUrl ?? ""
+                        "thumbnailUrl": $0.thumbnailUrl ?? "",
+                        "frameUrl": $0.frameUrl ?? $0.thumbnailUrl ?? ""
                     ]},
-                    "auth": ["token": token]  // Pass token in request data
+                    "auth": ["token": token]
                 ]
                 
                 print("📤 Calling findLeastSimilarVideo with \(boardVideos.count) board videos and \(candidateVideos.count) candidates")
@@ -286,7 +295,14 @@ class VideoViewModel: ObservableObject {
                 // Store sorted candidates if available
                 if let sortedList = response["sortedCandidates"] as? [[String: Any]] {
                     print("📊 Received \(sortedList.count) sorted candidates")
-                    // Store for future use if needed
+                    self.sortedCandidates = sortedList.compactMap { candidate in
+                        guard let videoId = candidate["videoId"] as? String,
+                              let distance = candidate["distance"] as? Double else {
+                            return nil
+                        }
+                        return (videoId: videoId, distance: distance)
+                    }
+                    self.nextVideoIndex = 0
                 }
                 
                 // Find the chosen video in our candidates
@@ -307,7 +323,6 @@ class VideoViewModel: ObservableObject {
             }
         }
         
-        // This should never be reached due to the throw in the loop
         throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to find similar video after retries"])
     }
     
@@ -396,7 +411,43 @@ class VideoViewModel: ObservableObject {
     }
     
     func getNextSortedVideo() async throws -> LikeTheseVideo {
-        return try await firestoreService.getNextSortedVideo(currentBoardVideos: currentBoardVideos)
+        // If we've reached the end or have no sorted candidates, get a fresh list
+        if nextVideoIndex >= sortedCandidates.count || sortedCandidates.isEmpty {
+            print("🔄 Refreshing sorted candidates list")
+            // Get current board videos
+            let boardVideos = videos
+            
+            // Get a set of candidate videos
+            var candidateVideos: [LikeTheseVideo] = []
+            for _ in 0..<5 {
+                do {
+                    let video = try await firestoreService.fetchRandomVideo()
+                    if !videos.contains(where: { $0.id == video.id }) {
+                        candidateVideos.append(video)
+                    }
+                } catch {
+                    print("❌ Error fetching candidate video: \(error.localizedDescription)")
+                }
+            }
+            
+            // Find least similar video and get new sorted list
+            let newVideo = try await findLeastSimilarVideo(
+                boardVideos: boardVideos,
+                candidateVideos: candidateVideos
+            )
+            return newVideo
+        }
+        
+        // Get next video from sorted list
+        let nextCandidate = sortedCandidates[nextVideoIndex]
+        guard let video = videos.first(where: { $0.id == nextCandidate.videoId }) else {
+            throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video not found in sorted candidates"])
+        }
+        
+        // Increment index for next time
+        nextVideoIndex += 1
+        
+        return video
     }
     
     func updateCurrentVideo(_ video: LikeTheseVideo) {

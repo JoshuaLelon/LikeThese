@@ -275,12 +275,25 @@ class VideoViewModel: ObservableObject {
                 print("📥 Received response from findLeastSimilarVideo")
                 
                 guard let response = result.data as? [String: Any],
-                      let chosenId = response["chosen"] as? String,
-                      let chosen = candidateVideos.first(where: { $0.id == chosenId }) else {
+                      let chosenId = response["chosen"] as? String else {
                     throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from findLeastSimilarVideo"])
                 }
                 
+                // Store sorted candidates if available
+                if let sortedList = response["sortedCandidates"] as? [[String: Any]] {
+                    print("📊 Received \(sortedList.count) sorted candidates")
+                    // Store for future use if needed
+                }
+                
+                // Find the chosen video in our candidates
+                guard let chosen = candidateVideos.first(where: { $0.id == chosenId }) else {
+                    print("❌ Chosen video \(chosenId) not found in candidates")
+                    throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Chosen video not found in candidates"])
+                }
+                
+                print("✅ Found chosen video: \(chosen.id)")
                 return chosen
+                
             } catch {
                 print("❌ Error in findLeastSimilarVideo (attempt \(attempt + 1)): \(error.localizedDescription)")
                 if attempt == 2 {

@@ -8,7 +8,8 @@
     "start": "npm run serve",
     "deploy": "node deploy.js production",
     "deploy:dev": "node deploy.js development",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "emulate": "cp .env.local .env && FUNCTIONS_ENVIRONMENT=local firebase emulators:start --only functions"
   },
   "engines": {
     "node": "18"

@@ -1011,6 +1011,7 @@ class VideoManager: NSObject, ObservableObject {
         
         // Store sorted candidates if available
         if let sortedList = response["sortedCandidates"] as? [[String: Any]] {
+            print("📊 Received \(sortedList.count) sorted candidates")
             self.sortedCandidates = sortedList.compactMap { candidate in
                 guard let videoId = candidate["videoId"] as? String,
                       let distance = candidate["distance"] as? Double else {
@@ -1021,10 +1022,13 @@ class VideoManager: NSObject, ObservableObject {
             self.nextVideoIndex = 0
         }
         
-        guard let video = videos.first(where: { $0.id == chosenId }) else {
+        // Find the chosen video in our candidates
+        guard let video = candidateVideos.first(where: { $0.id == chosenId }) else {
+            print("❌ Chosen video \(chosenId) not found in candidates")
             throw VideoError.videoNotFound
         }
         
+        print("✅ Found chosen video: \(video.id)")
         return video
     }
     

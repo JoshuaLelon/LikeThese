@@ -1,13 +1,31 @@
 const { defineSecret } = require('firebase-functions/params');
 const functions = require("firebase-functions/v2");
+const functionsV1 = require("firebase-functions");
 const admin = require("firebase-admin");
 const Replicate = require("replicate");
 const axios = require("axios");
-const { Client } = require("langsmith");
+const { Client, RunTree } = require("langsmith");
 const config = require("./config");
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
+
+// Define secrets
+const replicateApiKey = defineSecret('REPLICATE_API_KEY_SECRET');
+const langsmithApiKey = defineSecret('LANGSMITH_API_KEY_SECRET');
+
+// Set environment variables for LangSmith
+process.env.LANGSMITH_TRACING_V2 = "true";
+process.env.LANGSMITH_API_URL = "https://api.smith.langchain.com";
+process.env.LANGSMITH_PROJECT = "LikeThese";
+
+// Debug log environment variables (redacting sensitive info)
+console.log("🔍 LangSmith Environment Variables:", {
+  LANGSMITH_TRACING_V2: process.env.LANGSMITH_TRACING_V2,
+  LANGSMITH_API_URL: process.env.LANGSMITH_API_URL,
+  LANGSMITH_PROJECT: process.env.LANGSMITH_PROJECT,
+  LANGSMITH_API_KEY_SET: !!langsmithApiKey
+});
 
 admin.initializeApp();
 
@@ -19,11 +37,6 @@ const ERROR_MESSAGES = {
   GENERAL: "Failed to process video request"
 };
 
-// Define config parameters
-const replicateApiKey = defineSecret('REPLICATE_API_KEY_SECRET');
-const langsmithApiKey = defineSecret('LANGSMITH_API_KEY_SECRET');
-const langsmithBaseUrl = defineSecret('LANGSMITH_BASE_URL_SECRET');
-
 // Cache for CLIP embeddings
 const clipEmbeddingCache = new Map();
 
@@ -33,29 +46,65 @@ let langsmithClient = null;
 async function initializeLangSmith() {
   if (!langsmithClient) {
     try {
-      const apiKey = langsmithApiKey.value()?.trim();
+      console.log("🔄 [LangSmith] Starting initialization...");
+      
+      const apiKey = langsmithApiKey.value();
       if (!apiKey) {
-        console.log("No LangSmith API key configured, skipping logging");
-        return null;
+        console.error("❌ [LangSmith] API key not found in environment");
+        throw new Error("LANGSMITH_API_KEY_SECRET not found");
       }
 
-      console.log("🔄 Initializing LangSmith client...");
-      const baseUrl = "https://api.smith.langchain.com";
-      
-      langsmithClient = new Client({
-        apiKey,
-        apiUrl: baseUrl,
-        projectName: "LikeThese"
-      });
-      console.log("✅ Initialized LangSmith client");
+      return apiKey;
     } catch (error) {
-      console.error("❌ Failed to initialize LangSmith:", error);
-      console.error("Cause:", error.cause || "No cause available");
-      return null;
+      console.error("❌ [LangSmith] Initialization failed:", {
+        error_name: error.name,
+        error_message: error.message,
+        error_stack: error.stack,
+        error_response: error.response?.data || 'No response data'
+      });
+      throw error;
     }
   }
   return langsmithClient;
 }
+
+// Add test endpoint
+exports.testLangSmith = functions.https.onCall({
+  timeoutSeconds: 30,
+  memory: "256MiB",
+  secrets: [langsmithApiKey]
+}, async (data, context) => {
+  console.log("🔄 [LangSmith] Starting test endpoint...");
+  
+  try {
+    const client = await initializeLangSmith();
+    const projects = await client.listProjects();
+    
+    console.log("✅ [LangSmith] Test endpoint successful", {
+      projects_count: projects.length,
+      current_project: process.env.LANGSMITH_PROJECT,
+      environment: process.env.NODE_ENV || 'development'
+    });
+    
+    return {
+      status: "success",
+      projects_count: projects.length,
+      current_project: process.env.LANGSMITH_PROJECT,
+      environment: process.env.NODE_ENV || 'development'
+    };
+  } catch (error) {
+    console.error("❌ [LangSmith] Test endpoint failed:", {
+      error_name: error.name,
+      error_message: error.message,
+      error_stack: error.stack
+    });
+    
+    throw new functions.https.HttpsError('internal', 'LangSmith test failed', {
+      error_message: error.message,
+      error_name: error.name
+    });
+  }
+});
 
 // Batch fetch embeddings from Firestore
 async function batchFetchEmbeddings(videoIds) {
@@ -335,77 +384,165 @@ function computeAverageEmbedding(embeddingsArray) {
 exports.findLeastSimilarVideo = functions.https.onCall({
   timeoutSeconds: 60,
   memory: "1GiB",
-  secrets: [replicateApiKey, langsmithApiKey, langsmithBaseUrl]
+  secrets: [replicateApiKey, langsmithApiKey]
 }, async (request, context) => {
-  const startTime = Date.now();
-  const metrics = {
-    totalRuntime: 0,
-    totalEmbeddingTime: 0,
-    embeddingTimes: [],
-    error: null,
-    environment: config.environment
-  };
-
+  console.log("🚀 [LangSmith] Starting new trace session");
+  
+  let parentRun = null;
   try {
-    // Log environment info
-    console.log(`🌍 Running in ${config.environment} environment`);
-    
-    // Verify auth token if provided in request data
+    const apiKey = await initializeLangSmith();
+    console.log("✅ [LangSmith] Got API key successfully");
+
+    // Create parent run
+    console.log("🔄 [LangSmith] Creating parent run...");
+    parentRun = new RunTree({
+      name: "Video Similarity Sort",
+      run_type: "chain",
+      inputs: request.data,
+      serialized: {},
+      project_name: "LikeThese",
+      apiKey: apiKey,
+      apiUrl: process.env.LANGSMITH_API_URL
+    });
+
+    await parentRun.postRun();
+    console.log("✅ [LangSmith] Parent run created successfully");
+
+    // Auth verification child run
     if (request.data.auth?.token) {
+      console.log("🔄 [LangSmith] Creating auth verification run...");
+      const authRun = await parentRun.createChild({
+        name: "Auth Verification",
+        run_type: "tool",
+        inputs: { token: "***" }
+      });
+
+      await authRun.postRun();
+      const authStart = Date.now();
+
       try {
         await admin.auth().verifyIdToken(request.data.auth.token);
-        console.log("✅ Successfully verified provided auth token");
+        await authRun.end({
+          outputs: {
+            success: true,
+            computeTime: Date.now() - authStart
+          }
+        });
       } catch (error) {
-        console.error("❌ Invalid auth token:", error);
+        await authRun.end({
+          error: error.message,
+          outputs: {
+            success: false,
+            computeTime: Date.now() - authStart
+          }
+        });
         throw new functions.https.HttpsError('unauthenticated', 'Invalid authentication token');
       }
+
+      await authRun.patchRun();
     }
 
-    // Extract video data from request
+    // Extract video data and validate URLs
     const { boardVideos, candidateVideos } = request.data;
     console.log("📥 Processing request with:", {
       boardVideosCount: boardVideos.length,
       candidateVideosCount: candidateVideos.length
     });
 
-    // Validate all input URLs before processing
-    validateInputUrls(boardVideos, candidateVideos);
+    // URL validation child run
+    const validationRun = await parentRun.createChild({
+      name: "URL Validation",
+      run_type: "tool",
+      inputs: { boardVideos, candidateVideos }
+    });
 
-    // Get board video embeddings with caching
+    await validationRun.postRun();
+    const validationStart = Date.now();
+    validateInputUrls(boardVideos, candidateVideos);
+    await validationRun.end({
+      outputs: {
+        success: true,
+        computeTime: Date.now() - validationStart
+      }
+    });
+    await validationRun.patchRun();
+
+    // Board embeddings child run
+    const boardEmbeddingsRun = await parentRun.createChild({
+      name: "Board Embeddings",
+      run_type: "tool",
+      inputs: { videos: boardVideos }
+    });
+
+    await boardEmbeddingsRun.postRun();
     const boardEmbeddingsStart = Date.now();
     const boardEmbeddingsResults = await getEmbeddingsWithCache(boardVideos);
-    const boardEmbeddings = boardEmbeddingsResults.map(r => r.embedding);
-    
-    // Track metrics
-    boardEmbeddingsResults.forEach(r => {
-      metrics.embeddingTimes.push({
-        type: 'board',
-        id: r.videoId,
-        source: r.source
-      });
+    const boardEmbeddingsEnd = Date.now();
+
+    await boardEmbeddingsRun.end({
+      outputs: {
+        embeddings: boardEmbeddingsResults,
+        computeTime: boardEmbeddingsEnd - boardEmbeddingsStart,
+        cacheHits: boardEmbeddingsResults.filter(r => r.source === 'cache').length,
+        cacheMisses: boardEmbeddingsResults.filter(r => r.source === 'compute').length
+      }
     });
-    metrics.totalEmbeddingTime += Date.now() - boardEmbeddingsStart;
+    await boardEmbeddingsRun.patchRun();
 
-    // Compute board average embedding
-    console.log("📊 Computing board average embedding");
-    const boardAverageEmbedding = computeAverageEmbedding(boardEmbeddings);
+    // Board average child run
+    const boardAverageRun = await parentRun.createChild({
+      name: "Board Average",
+      run_type: "tool",
+      inputs: { embeddings: boardEmbeddingsResults }
+    });
 
-    // Get candidate video embeddings with caching
+    await boardAverageRun.postRun();
+    const boardAverageStart = Date.now();
+    const boardAverageEmbedding = computeAverageEmbedding(boardEmbeddingsResults.map(r => r.embedding));
+    const boardAverageEnd = Date.now();
+
+    await boardAverageRun.end({
+      outputs: {
+        averageEmbedding: boardAverageEmbedding,
+        computeTime: boardAverageEnd - boardAverageStart
+      }
+    });
+    await boardAverageRun.patchRun();
+
+    // Candidate embeddings child run
+    const candidateEmbeddingsRun = await parentRun.createChild({
+      name: "Candidate Embeddings",
+      run_type: "tool",
+      inputs: { videos: candidateVideos }
+    });
+
+    await candidateEmbeddingsRun.postRun();
     const candidateEmbeddingsStart = Date.now();
     const candidateEmbeddingsResults = await getEmbeddingsWithCache(candidateVideos);
-    
-    // Track metrics
-    candidateEmbeddingsResults.forEach(r => {
-      metrics.embeddingTimes.push({
-        type: 'candidate',
-        id: r.videoId,
-        source: r.source
-      });
-    });
-    metrics.totalEmbeddingTime += Date.now() - candidateEmbeddingsStart;
+    const candidateEmbeddingsEnd = Date.now();
 
-    // Compute distances and sort candidates
-    console.log("🔄 Computing distances and sorting candidates");
+    await candidateEmbeddingsRun.end({
+      outputs: {
+        embeddings: candidateEmbeddingsResults,
+        computeTime: candidateEmbeddingsEnd - candidateEmbeddingsStart,
+        cacheHits: candidateEmbeddingsResults.filter(r => r.source === 'cache').length,
+        cacheMisses: candidateEmbeddingsResults.filter(r => r.source === 'compute').length
+      }
+    });
+    await candidateEmbeddingsRun.patchRun();
+
+    // Sorting child run
+    const sortingRun = await parentRun.createChild({
+      name: "Sort Candidates",
+      run_type: "tool",
+      inputs: {
+        boardAverage: boardAverageEmbedding,
+        candidates: candidateEmbeddingsResults
+      }
+    });
+
+    await sortingRun.postRun();
+    const sortingStart = Date.now();
     const sortedCandidates = candidateEmbeddingsResults.map(candidate => {
       const distance = cosineDistance(candidate.embedding, boardAverageEmbedding);
       return {
@@ -413,98 +550,96 @@ exports.findLeastSimilarVideo = functions.https.onCall({
         distance
       };
     }).sort((a, b) => a.distance - b.distance);
+    const sortingEnd = Date.now();
 
-    // Generate poster image if prompt provided
+    await sortingRun.end({
+      outputs: {
+        sortedCandidates,
+        computeTime: sortingEnd - sortingStart
+      }
+    });
+    await sortingRun.patchRun();
+
+    // Poster generation child run (if needed)
     let posterImageUrl = null;
     let posterTime = 0;
     if (request.data.textPrompt) {
+      const posterRun = await parentRun.createChild({
+        name: "Poster Generation",
+        run_type: "tool",
+        inputs: { prompt: request.data.textPrompt }
+      });
+
+      await posterRun.postRun();
       const posterStart = Date.now();
       posterImageUrl = await generatePosterImage(request.data.textPrompt);
       posterTime = Date.now() - posterStart;
-    }
 
-    metrics.totalRuntime = Date.now() - startTime;
-
-    // Log to LangSmith if configured
-    try {
-      const client = await initializeLangSmith();
-      if (client) {
-        try {
-          console.log("🔄 Logging run to LangSmith...");
-          await client.createRun({
-            name: "VideoReplacementFlow",
-            run_type: "chain",
-            project_name: "LikeThese",
-            inputs: {
-              boardVideos: boardVideos.map(v => ({ id: v.id, thumbnailUrl: v.thumbnailUrl })),
-              candidateVideos: candidateVideos.map(v => ({ id: v.id, thumbnailUrl: v.thumbnailUrl })),
-              textPrompt: request.data.textPrompt
-            },
-            outputs: {
-              sortedCandidates,
-              posterImageUrl,
-              metrics: {
-                ...metrics,
-                posterGenerationTime: posterTime,
-                boardAverageComputed: true
-              }
-            },
-            start_time: new Date(startTime).toISOString(),
-            end_time: new Date().toISOString(),
-            error: null
-          });
-          console.log("✅ Successfully logged to LangSmith");
-        } catch (logError) {
-          console.error("❌ Failed to log run to LangSmith:", logError);
-          console.error("Cause:", logError.cause || "No cause available");
+      await posterRun.end({
+        outputs: {
+          posterImageUrl,
+          computeTime: posterTime
         }
-      }
-    } catch (error) {
-      console.error("❌ Failed to initialize LangSmith:", error);
+      });
+      await posterRun.patchRun();
     }
+
+    // End parent run with complete metrics
+    const metrics = {
+      totalRuntime: Date.now() - Date.now(),
+      totalEmbeddingTime: (boardEmbeddingsEnd - boardEmbeddingsStart) + (candidateEmbeddingsEnd - candidateEmbeddingsStart),
+      embeddingTimes: [
+        { phase: 'board', time: boardEmbeddingsEnd - boardEmbeddingsStart },
+        { phase: 'candidates', time: candidateEmbeddingsEnd - candidateEmbeddingsStart }
+      ],
+      boardAverageComputed: true,
+      posterGenerationTime: posterTime,
+      error: null,
+      environment: process.env.NODE_ENV || 'development'
+    };
+
+    await parentRun.end({
+      outputs: {
+        chosen: sortedCandidates[0].videoId,
+        sortedCandidates,
+        posterImageUrl,
+        metrics
+      }
+    });
+    await parentRun.patchRun(false); // Include child runs
 
     return {
-      chosen: sortedCandidates[0].videoId, // Most similar to average
-      sortedCandidates, // Full sorted list
-      score: sortedCandidates[0].distance,
-      posterImageUrl
+      chosen: sortedCandidates[0].videoId,
+      sortedCandidates,
+      posterImageUrl,
+      metrics
     };
 
   } catch (error) {
-    metrics.totalRuntime = Date.now() - startTime;
-    metrics.error = error.message;
+    console.error("❌ [LangSmith] Error in findLeastSimilarVideo:", {
+      error_name: error.name,
+      error_message: error.message,
+      error_stack: error.stack
+    });
 
-    // Log error to LangSmith if configured
-    try {
-      const client = await initializeLangSmith();
-      if (client) {
-        try {
-          console.log("🔄 Logging error to LangSmith...");
-          await client.createRun({
-            name: "VideoReplacementFlow",
-            run_type: "chain",
-            project_name: "LikeThese",
-            inputs: request.data,
-            outputs: {
-              error: error.message,
-              metrics
-            },
-            start_time: new Date(startTime).toISOString(),
-            end_time: new Date().toISOString(),
-            error: error.message
-          });
-          console.log("✅ Successfully logged error to LangSmith");
-        } catch (logError) {
-          console.error("❌ Failed to log error to LangSmith:", logError);
-          console.error("Cause:", logError.cause || "No cause available");
-        }
-      }
-    } catch (error) {
-      console.error("❌ Failed to initialize LangSmith:", error);
+    const metrics = {
+      totalRuntime: Date.now() - Date.now(),
+      totalEmbeddingTime: 0,
+      embeddingTimes: [],
+      boardAverageComputed: false,
+      posterGenerationTime: 0,
+      error: error.message,
+      environment: process.env.NODE_ENV || 'development'
+    };
+
+    if (parentRun) {
+      await parentRun.end({
+        error: error.message,
+        outputs: { metrics }
+      });
+      await parentRun.patchRun(false);
     }
 
-    console.error("Error in findLeastSimilarVideo:", error);
-    // If it's not already an HttpsError, wrap it in one
     if (!(error instanceof functions.https.HttpsError)) {
       error = new functions.https.HttpsError('internal', ERROR_MESSAGES.GENERAL, error);
     }
@@ -633,4 +768,9 @@ exports.extractVideoFrame = functions.https.onCall({
     console.error('❌ Frame extraction process failed:', error);
     throw new functions.https.HttpsError('internal', ERROR_MESSAGES.FRAME_EXTRACTION, error);
   }
+});
+
+// Add health check endpoint using v1 functions
+exports.healthCheck = functionsV1.https.onRequest((req, res) => {
+  res.status(200).send('OK');
 }); 

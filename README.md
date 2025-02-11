@@ -146,6 +146,29 @@ xcrun simctl spawn booted log stream \
   --debug --info
 ```
 
+## Firebase Functions Logging
+For viewing and debugging Firebase Functions logs, we follow a set of best practices documented in our [Firebase Logging Cursor Rule](.cursor/rules/firebase-logging.mdc).
+
+Key points:
+1. Always use `| cat` to prevent pager issues
+2. Filter by function name with `--only`
+3. Use grep for pattern matching
+4. Follow consistent emoji/symbol conventions in logs
+5. See "Approaches That Didn't Work" section in the cursor rule for common pitfalls and their solutions
+
+Example commands:
+```bash
+# View all logs
+firebase functions:log | cat
+
+# View logs for specific function
+firebase functions:log --only findLeastSimilarVideo | cat
+
+# Search for errors or specific patterns
+firebase functions:log --only findLeastSimilarVideo | grep -i "error\|failed" | cat
+```
+
+See the [Firebase Logging Cursor Rule](.cursor/rules/firebase-logging.mdc) for complete documentation.
 
 ---
 

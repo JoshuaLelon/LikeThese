@@ -52,20 +52,37 @@ class VideoViewModel: ObservableObject {
         error = nil
         
         do {
-            // Fetch initial videos plus buffer
-            let initialVideos = try await firestoreService.fetchInitialVideos(limit: pageSize + minBufferSize)
+            // Fetch 4 random videos for initial grid
+            var initialVideos: [LikeTheseVideo] = []
+            for _ in 0..<4 {
+                let video = try await firestoreService.fetchRandomVideo()
+                initialVideos.append(video)
+            }
             print("✅ Loaded \(initialVideos.count) initial videos")
             
-            // Split into visible videos and buffer
-            let visibleVideos = Array(initialVideos.prefix(pageSize))
-            videoBuffer = Array(initialVideos.dropFirst(pageSize))
+            // Fetch buffer videos in parallel
+            let bufferVideos = try await withThrowingTaskGroup(of: LikeTheseVideo.self) { group in
+                for _ in 0..<minBufferSize {
+                    group.addTask {
+                        try await self.firestoreService.fetchRandomVideo()
+                    }
+                }
+                
+                var videos: [LikeTheseVideo] = []
+                for try await video in group {
+                    videos.append(video)
+                }
+                return videos
+            }
+            
+            videoBuffer = bufferVideos
             
             // Store initial sequence
-            for (index, video) in visibleVideos.enumerated() {
+            for (index, video) in initialVideos.enumerated() {
                 videoSequence[index] = video
             }
             
-            videos = visibleVideos
+            videos = initialVideos
         } catch {
             print("❌ Error loading initial videos: \(error.localizedDescription)")
             self.error = error

@@ -386,15 +386,14 @@ exports.findLeastSimilarVideo = functions.https.onCall({
   memory: "1GiB",
   secrets: [replicateApiKey, langsmithApiKey]
 }, async (request, context) => {
-  console.log("🚀 [LangSmith] Starting new trace session");
-  
+  const functionStartTime = Date.now();
   let parentRun = null;
+  let totalEmbeddingTime = 0;
+  let computedEmbeddingsCount = 0;
+  let totalImagesCount = 0;
+  
   try {
     const apiKey = await initializeLangSmith();
-    console.log("✅ [LangSmith] Got API key successfully");
-
-    // Create parent run
-    console.log("🔄 [LangSmith] Creating parent run...");
     parentRun = new RunTree({
       name: "Video Similarity Sort",
       run_type: "chain",
@@ -404,145 +403,32 @@ exports.findLeastSimilarVideo = functions.https.onCall({
       apiKey: apiKey,
       apiUrl: process.env.LANGSMITH_API_URL
     });
-
     await parentRun.postRun();
-    console.log("✅ [LangSmith] Parent run created successfully");
-
-    // Auth verification child run
-    if (request.data.auth?.token) {
-      console.log("🔄 [LangSmith] Creating auth verification run...");
-      const authRun = await parentRun.createChild({
-        name: "Auth Verification",
-        run_type: "tool",
-        inputs: { token: "***" }
-      });
-
-      await authRun.postRun();
-      const authStart = Date.now();
-
-      try {
-        await admin.auth().verifyIdToken(request.data.auth.token);
-        await authRun.end({
-          outputs: {
-            success: true,
-            computeTime: Date.now() - authStart
-          }
-        });
-      } catch (error) {
-        await authRun.end({
-          error: error.message,
-          outputs: {
-            success: false,
-            computeTime: Date.now() - authStart
-          }
-        });
-        throw new functions.https.HttpsError('unauthenticated', 'Invalid authentication token');
-      }
-
-      await authRun.patchRun();
-    }
 
     // Extract video data and validate URLs
     const { boardVideos, candidateVideos } = request.data;
-    console.log("📥 Processing request with:", {
-      boardVideosCount: boardVideos.length,
-      candidateVideosCount: candidateVideos.length
-    });
-
-    // URL validation child run
-    const validationRun = await parentRun.createChild({
-      name: "URL Validation",
-      run_type: "tool",
-      inputs: { boardVideos, candidateVideos }
-    });
-
-    await validationRun.postRun();
-    const validationStart = Date.now();
+    totalImagesCount = boardVideos.length + candidateVideos.length;
+    
     validateInputUrls(boardVideos, candidateVideos);
-    await validationRun.end({
-      outputs: {
-        success: true,
-        computeTime: Date.now() - validationStart
-      }
-    });
-    await validationRun.patchRun();
 
-    // Board embeddings child run
-    const boardEmbeddingsRun = await parentRun.createChild({
-      name: "Board Embeddings",
-      run_type: "tool",
-      inputs: { videos: boardVideos }
-    });
-
-    await boardEmbeddingsRun.postRun();
+    // Get board embeddings
     const boardEmbeddingsStart = Date.now();
     const boardEmbeddingsResults = await getEmbeddingsWithCache(boardVideos);
-    const boardEmbeddingsEnd = Date.now();
+    const boardEmbeddingsTime = Date.now() - boardEmbeddingsStart;
+    computedEmbeddingsCount += boardEmbeddingsResults.filter(r => r.source === 'computed' || r.source === 'computed_new').length;
+    totalEmbeddingTime += boardEmbeddingsTime;
 
-    await boardEmbeddingsRun.end({
-      outputs: {
-        embeddings: boardEmbeddingsResults,
-        computeTime: boardEmbeddingsEnd - boardEmbeddingsStart,
-        cacheHits: boardEmbeddingsResults.filter(r => r.source === 'cache').length,
-        cacheMisses: boardEmbeddingsResults.filter(r => r.source === 'compute').length
-      }
-    });
-    await boardEmbeddingsRun.patchRun();
-
-    // Board average child run
-    const boardAverageRun = await parentRun.createChild({
-      name: "Board Average",
-      run_type: "tool",
-      inputs: { embeddings: boardEmbeddingsResults }
-    });
-
-    await boardAverageRun.postRun();
-    const boardAverageStart = Date.now();
+    // Compute board average
     const boardAverageEmbedding = computeAverageEmbedding(boardEmbeddingsResults.map(r => r.embedding));
-    const boardAverageEnd = Date.now();
 
-    await boardAverageRun.end({
-      outputs: {
-        averageEmbedding: boardAverageEmbedding,
-        computeTime: boardAverageEnd - boardAverageStart
-      }
-    });
-    await boardAverageRun.patchRun();
-
-    // Candidate embeddings child run
-    const candidateEmbeddingsRun = await parentRun.createChild({
-      name: "Candidate Embeddings",
-      run_type: "tool",
-      inputs: { videos: candidateVideos }
-    });
-
-    await candidateEmbeddingsRun.postRun();
+    // Get candidate embeddings
     const candidateEmbeddingsStart = Date.now();
     const candidateEmbeddingsResults = await getEmbeddingsWithCache(candidateVideos);
-    const candidateEmbeddingsEnd = Date.now();
+    const candidateEmbeddingsTime = Date.now() - candidateEmbeddingsStart;
+    computedEmbeddingsCount += candidateEmbeddingsResults.filter(r => r.source === 'computed' || r.source === 'computed_new').length;
+    totalEmbeddingTime += candidateEmbeddingsTime;
 
-    await candidateEmbeddingsRun.end({
-      outputs: {
-        embeddings: candidateEmbeddingsResults,
-        computeTime: candidateEmbeddingsEnd - candidateEmbeddingsStart,
-        cacheHits: candidateEmbeddingsResults.filter(r => r.source === 'cache').length,
-        cacheMisses: candidateEmbeddingsResults.filter(r => r.source === 'compute').length
-      }
-    });
-    await candidateEmbeddingsRun.patchRun();
-
-    // Sorting child run
-    const sortingRun = await parentRun.createChild({
-      name: "Sort Candidates",
-      run_type: "tool",
-      inputs: {
-        boardAverage: boardAverageEmbedding,
-        candidates: candidateEmbeddingsResults
-      }
-    });
-
-    await sortingRun.postRun();
-    const sortingStart = Date.now();
+    // Sort candidates
     const sortedCandidates = candidateEmbeddingsResults.map(candidate => {
       const distance = cosineDistance(candidate.embedding, boardAverageEmbedding);
       return {
@@ -550,52 +436,22 @@ exports.findLeastSimilarVideo = functions.https.onCall({
         distance
       };
     }).sort((a, b) => a.distance - b.distance);
-    const sortingEnd = Date.now();
 
-    await sortingRun.end({
-      outputs: {
-        sortedCandidates,
-        computeTime: sortingEnd - sortingStart
-      }
-    });
-    await sortingRun.patchRun();
-
-    // Poster generation child run (if needed)
+    // Generate poster if needed
     let posterImageUrl = null;
-    let posterTime = 0;
     if (request.data.textPrompt) {
-      const posterRun = await parentRun.createChild({
-        name: "Poster Generation",
-        run_type: "tool",
-        inputs: { prompt: request.data.textPrompt }
-      });
-
-      await posterRun.postRun();
-      const posterStart = Date.now();
       posterImageUrl = await generatePosterImage(request.data.textPrompt);
-      posterTime = Date.now() - posterStart;
-
-      await posterRun.end({
-        outputs: {
-          posterImageUrl,
-          computeTime: posterTime
-        }
-      });
-      await posterRun.patchRun();
     }
 
-    // End parent run with complete metrics
+    // Log metrics
     const metrics = {
-      totalRuntime: Date.now() - Date.now(),
-      totalEmbeddingTime: (boardEmbeddingsEnd - boardEmbeddingsStart) + (candidateEmbeddingsEnd - candidateEmbeddingsStart),
-      embeddingTimes: [
-        { phase: 'board', time: boardEmbeddingsEnd - boardEmbeddingsStart },
-        { phase: 'candidates', time: candidateEmbeddingsEnd - candidateEmbeddingsStart }
-      ],
-      boardAverageComputed: true,
-      posterGenerationTime: posterTime,
-      error: null,
-      environment: process.env.NODE_ENV || 'development'
+      totalRuntime: Date.now() - functionStartTime,
+      totalImagesProcessed: totalImagesCount,
+      embeddingMetrics: {
+        totalEmbeddingTime,
+        computedEmbeddingsCount,
+        cachedEmbeddingsCount: totalImagesCount - computedEmbeddingsCount
+      }
     };
 
     await parentRun.end({
@@ -606,7 +462,7 @@ exports.findLeastSimilarVideo = functions.https.onCall({
         metrics
       }
     });
-    await parentRun.patchRun(false); // Include child runs
+    await parentRun.patchRun(false);
 
     return {
       chosen: sortedCandidates[0].videoId,
@@ -616,20 +472,20 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     };
 
   } catch (error) {
-    console.error("❌ [LangSmith] Error in findLeastSimilarVideo:", {
+    console.error("❌ Error in findLeastSimilarVideo:", {
       error_name: error.name,
-      error_message: error.message,
-      error_stack: error.stack
+      error_message: error.message
     });
 
     const metrics = {
-      totalRuntime: Date.now() - Date.now(),
-      totalEmbeddingTime: 0,
-      embeddingTimes: [],
-      boardAverageComputed: false,
-      posterGenerationTime: 0,
-      error: error.message,
-      environment: process.env.NODE_ENV || 'development'
+      totalRuntime: Date.now() - functionStartTime,
+      totalImagesProcessed: totalImagesCount,
+      embeddingMetrics: {
+        totalEmbeddingTime,
+        computedEmbeddingsCount,
+        cachedEmbeddingsCount: totalImagesCount - computedEmbeddingsCount
+      },
+      error: error.message
     };
 
     if (parentRun) {

@@ -153,7 +153,7 @@ xcrun simctl spawn booted log stream \
 
 Below is a summary of the parse errors we ran into during this conversation, along with their root causes and how we fixed them.
 
-### 1) Error: “Parse error on line…” involving parentheses or quotes in node labels
+### 1) Error: "Parse error on line…" involving parentheses or quotes in node labels
 
 > **Example Snippet (Trigger)**  
 > ```
@@ -180,7 +180,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 
 ---
 
-### 2) Error: “Parse error on line…” involving curly quotes or special characters
+### 2) Error: "Parse error on line…" involving curly quotes or special characters
 
 > **Example Snippet (Trigger)**  
 > ```
@@ -195,7 +195,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 > ```
 >  
 > **Root Cause**  
-> Curly quotes (“ ”) or multi-line strings in a Mermaid label cause parse issues.  
+> Curly quotes ("" or "") or multi-line strings in a Mermaid label cause parse issues.  
 >  
 > **Fix**  
 > Replace curly quotes with straight quotes or remove quotes entirely. Also avoid abrupt line breaks.  
@@ -205,7 +205,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 
 ---
 
-### 3) Error: “Parse error on line…” when using code fences and markdown simultaneously
+### 3) Error: "Parse error on line…" when using code fences and markdown simultaneously
 
 > **Example Snippet (Trigger)**  
 > ```
@@ -227,7 +227,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 
 ---
 
-### 4) Error: “Parse error” whenever special punctuation or partial lines remained
+### 4) Error: "Parse error" whenever special punctuation or partial lines remained
 
 > **Example Snippet (Trigger)**  
 > ```
@@ -235,7 +235,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 > Autoplay Next Video (Random)"
 > ```
 > **Root Cause**  
-> If punctuation like `(`, `'`, or `"` is placed in a node label incorrectly, Mermaid’s parser fails.  
+> If punctuation like `(`, `'`, or `"` is placed in a node label incorrectly, Mermaid's parser fails.  
 >  
 > **Fix**  
 > We replaced or removed parentheses and quotes, or used `\(` and `\)` as escapes where needed.  
@@ -253,3 +253,30 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 4. **Explanation**: By limiting node labels to plain text without parentheses/curly quotes, or by properly escaping them, we resolved the parsing issues.
 
 That covers all the errors we encountered, why they happened, and how we fixed them.
+
+## Features
+
+### Phase 12: Extended AI Flow & First-Frame Extraction
+- Dynamic first frame extraction using ffmpeg
+- Sorted video queue based on board average embedding
+- Sequential playback in fullscreen mode
+- Hybrid approach for thumbnails/frames (uses existing thumbnails when available)
+- Improved error handling and fallback mechanisms
+
+## Project Structure
+```
+LikeThese/
+├── implementation_docs/
+│   ├── phase_11.md         # Core AI similarity implementation
+│   └── phase_12.md         # Extended AI flow & frame extraction
+├── scripts/
+│   ├── seed_videos.sh      # The main seeding script
+│   └── README.md           # Scripts documentation
+├── sample_data/
+│   ├── videos/             # Test video files
+│   └── thumbnails/         # Generated thumbnails & frames
+└── src/
+    └── app/
+        ├── api/            # Firebase Functions & API docs
+        └── components/     # React components & docs
+```

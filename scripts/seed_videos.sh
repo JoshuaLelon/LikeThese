@@ -16,6 +16,17 @@ print_section() {
     echo -e "\n${BLUE}=== $1 ===${NC}"
 }
 
+# Function to extract first frame
+extract_first_frame() {
+    local video=$1
+    local output=$2
+    local video_name=$(basename "$video" .mp4)
+    
+    echo -e "${YELLOW}Extracting first frame for $video_name...${NC}"
+    ffmpeg -i "$video" -vf "select=eq(n\,0)" -vframes 1 "$output"
+    echo -e "${GREEN}✅ First frame extracted for $video_name${NC}"
+}
+
 # Set up Python virtual environment if it doesn't exist
 print_section "Setting up environment"
 if [ ! -d "venv" ]; then
@@ -61,8 +72,10 @@ print_section "Checking Firebase Storage"
 echo -e "${YELLOW}Checking existing files in Firebase Storage...${NC}"
 existing_videos=$(gsutil ls gs://likethese-fc23d.firebasestorage.app/videos/*.mp4 2>/dev/null)
 existing_thumbnails=$(gsutil ls gs://likethese-fc23d.firebasestorage.app/thumbnails/*.jpg 2>/dev/null)
+existing_frames=$(gsutil ls gs://likethese-fc23d.firebasestorage.app/frames/*.jpg 2>/dev/null)
 video_count=$(echo "$existing_videos" | grep -c "^" || true)
 thumbnail_count=$(echo "$existing_thumbnails" | grep -c "^" || true)
+frame_count=$(echo "$existing_frames" | grep -c "^" || true)
 
 if [ "$video_count" -gt 0 ] && [ "$thumbnail_count" -gt 0 ]; then
     echo -e "${GREEN}✓ Found $video_count videos and $thumbnail_count thumbnails in Firebase Storage${NC}"
@@ -83,6 +96,7 @@ else
     # Create directories if they don't exist
     mkdir -p "$VIDEO_DIR"
     mkdir -p "$THUMBNAIL_DIR"
+    mkdir -p "sample_data/frames"
 
     # Check if we have videos
     video_count=$(ls -1 "$VIDEO_DIR"/*.mp4 2>/dev/null | wc -l)
@@ -92,26 +106,11 @@ else
         exit 1
     fi
 
-    # Check if we have thumbnails
-    thumbnail_count=$(ls -1 "$THUMBNAIL_DIR"/*.jpg 2>/dev/null | wc -l)
-    if [ "$thumbnail_count" -eq 0 ]; then
-        echo -e "${YELLOW}No thumbnails found in $THUMBNAIL_DIR${NC}"
-        echo "Generating thumbnails from videos..."
-        
-        # Check if ffmpeg is installed
-        if ! command -v ffmpeg &> /dev/null; then
-            echo -e "${RED}ffmpeg is not installed. Please install it first:${NC}"
-            echo "brew install ffmpeg"
-            exit 1
-        fi
-        
-        # Generate thumbnails for each video
-        for video in "$VIDEO_DIR"/*.mp4; do
-            basename=$(basename "$video" .mp4)
-            echo -e "${YELLOW}Generating thumbnail for $basename...${NC}"
-            ffmpeg -i "$video" -vframes 1 "$THUMBNAIL_DIR/${basename}.jpg" -y
-            echo -e "${GREEN}✓ Generated thumbnail for $basename${NC}"
-        done
+    # Check if ffmpeg is installed
+    if ! command -v ffmpeg &> /dev/null; then
+        echo -e "${RED}ffmpeg is not installed. Please install it first:${NC}"
+        echo "brew install ffmpeg"
+        exit 1
     fi
 
     print_section "Uploading to Firebase Storage"
@@ -143,20 +142,27 @@ else
             echo "✅ Video uploaded successfully"
         fi
 
-        # Generate and upload thumbnail if needed
-        thumbnail_path="$THUMBNAIL_DIR/$video_name.jpg"
-        if [ ! -f "$thumbnail_path" ]; then
-            echo "🖼️ Generating thumbnail..."
-            ffmpeg -i "$video" -vf "select=eq(n\,0)" -vframes 1 "$thumbnail_path"
-            echo "✅ Thumbnail generated"
+        # Extract first frame and use as thumbnail
+        frame_path="sample_data/frames/$video_name.jpg"
+        if [ ! -f "$frame_path" ]; then
+            echo "🖼️ Extracting first frame..."
+            extract_first_frame "$video" "$frame_path"
+            echo "✅ First frame extracted"
         fi
 
-        if gsutil -q stat "gs://likethese-fc23d.firebasestorage.app/thumbnails/$video_name.jpg"; then
-            echo "✅ Thumbnail already exists in Firebase Storage"
+        # Upload frame to Firebase Storage
+        if gsutil -q stat "gs://likethese-fc23d.firebasestorage.app/frames/$video_name.jpg"; then
+            echo "✅ Frame already exists in Firebase Storage"
         else
-            echo "📤 Uploading thumbnail to Firebase Storage..."
-            gsutil cp "$thumbnail_path" "gs://likethese-fc23d.firebasestorage.app/thumbnails/$video_name.jpg"
-            echo "✅ Thumbnail uploaded successfully"
+            echo "📤 Uploading frame to Firebase Storage..."
+            gsutil cp "$frame_path" "gs://likethese-fc23d.firebasestorage.app/frames/$video_name.jpg"
+            echo "✅ Frame uploaded successfully"
+            
+            # Also copy to thumbnails for backward compatibility
+            echo "📤 Copying frame to thumbnails directory..."
+            gsutil cp "gs://likethese-fc23d.firebasestorage.app/frames/$video_name.jpg" \
+                     "gs://likethese-fc23d.firebasestorage.app/thumbnails/$video_name.jpg"
+            echo "✅ Frame copied to thumbnails successfully"
         fi
 
         # Compute CLIP embedding and update Firestore
@@ -229,10 +235,13 @@ done
 print_section "Summary"
 echo -e "Videos in Storage: ${GREEN}$video_count${NC}"
 echo -e "Thumbnails in Storage: ${GREEN}$thumbnail_count${NC}"
+echo -e "Frames in Storage: ${GREEN}$frame_count${NC}"
 echo -e "\n${YELLOW}Video files:${NC}"
 echo "$existing_videos"
 echo -e "\n${YELLOW}Thumbnail files:${NC}"
 echo "$existing_thumbnails"
+echo -e "\n${YELLOW}Frame files:${NC}"
+echo "$existing_frames"
 
 # Print all Firestore documents
 print_section "Current Firestore Documents"

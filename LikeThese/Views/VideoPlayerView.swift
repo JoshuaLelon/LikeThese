@@ -1,80 +1,154 @@
 import SwiftUI
 import AVKit
+import FirebaseFirestore
+
+// Import our custom Video model from VideoManager
+typealias CustomVideo = LikeThese.Video
 
 struct VideoPlayerView: View {
-    let url: URL
-    let index: Int
-    @ObservedObject var videoManager: VideoManager
-    @State private var isLoading = true
-    @State private var retryCount = 0
-    private let maxRetries = 3
-    private let videoCacheService = VideoCacheService.shared
+    @StateObject private var viewModel: VideoPlayerViewModel
+    @Environment(\.presentationMode) var presentationMode
+    
+    // Add state for fullscreen mode
+    @State private var isFullscreen = false
+    
+    init(video: CustomVideo, boardVideos: [CustomVideo]) {
+        _viewModel = StateObject(wrappedValue: VideoPlayerViewModel(video: video, boardVideos: boardVideos))
+    }
     
     var body: some View {
-        ZStack {
-            VideoPlayer(player: videoManager.player(for: index))
-                .aspectRatio(contentMode: .fill)
-                .clipped()
-                .ignoresSafeArea()
-                .onAppear {
-                    print("📱 VIDEO PLAYER: View appeared for index \(index)")
-                    Task {
-                        await loadVideo()
+        GeometryReader { geometry in
+            ZStack {
+                // Video player
+                VideoPlayer(player: viewModel.player)
+                    .edgesIgnoringSafeArea(.all)
+                
+                // Swipe gesture overlay
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 50)
+                            .onEnded { value in
+                                let verticalAmount = value.translation.height
+                                let horizontalAmount = value.translation.width
+                                
+                                // Determine if it's a vertical or horizontal swipe
+                                if abs(verticalAmount) > abs(horizontalAmount) {
+                                    if verticalAmount < 0 {  // Swipe up
+                                        Task {
+                                            if isFullscreen {
+                                                await viewModel.loadNextSortedVideo()
+                                            } else {
+                                                await viewModel.loadLeastSimilarVideo()
+                                                withAnimation {
+                                                    isFullscreen = true
+                                                }
+                                            }
+                                        }
+                                    } else {  // Swipe down
+                                        withAnimation {
+                                            isFullscreen = false
+                                            presentationMode.wrappedValue.dismiss()
+                                        }
+                                    }
+                                }
+                            }
+                    )
+                
+                // Loading overlay
+                if viewModel.isLoading {
+                    LoadingView()
+                }
+                
+                // Error overlay
+                if let error = viewModel.error {
+                    ErrorView(error: error) {
+                        Task {
+                            await viewModel.retry()
+                        }
                     }
                 }
-            
-            if isLoading || videoManager.bufferingStates[index] == true {
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    if let progress = videoManager.bufferingProgress[index], !isLoading {
-                        Text("\(Int(progress * 100))%")
-                            .foregroundColor(.white)
-                            .font(.caption)
-                    }
+            }
+            .onChange(of: isFullscreen) { newValue in
+                if !newValue {
+                    // Reset sorted queue when exiting fullscreen
+                    VideoManager.shared.resetSortedQueue()
                 }
             }
         }
     }
+}
+
+class VideoPlayerViewModel: ObservableObject {
+    @Published var player: AVPlayer
+    @Published var isLoading = false
+    @Published var error: Error?
     
-    private func loadVideo() async {
-        repeat {
-            do {
-                let playerItem = try await videoCacheService.preloadVideo(url: url)
-                await MainActor.run {
-                    if let player = videoManager.player(for: index) as AVPlayer? {
-                        if let currentItem = player.currentItem, currentItem.status == .failed {
-                            player.replaceCurrentItem(with: playerItem)
-                        }
-                        isLoading = false
-                        retryCount = 0 // Reset on success
-                    }
-                }
-                break // Success - exit loop
-            } catch {
-                print("❌ VIDEO PLAYER: Failed to load video at index \(index): \(error.localizedDescription)")
-                retryCount += 1
-                if retryCount >= maxRetries {
-                    print("❌ VIDEO PLAYER: Max retries reached for video at index \(index)")
-                    break
-                }
-                try? await Task.sleep(nanoseconds: UInt64(1_000_000_000)) // Wait 1 second before retry
+    private let video: CustomVideo
+    private let boardVideos: [CustomVideo]
+    
+    init(video: CustomVideo, boardVideos: [CustomVideo]) {
+        self.video = video
+        self.boardVideos = boardVideos
+        self.player = AVPlayer(url: URL(string: video.url)!)
+    }
+    
+    func loadLeastSimilarVideo() async {
+        isLoading = true
+        error = nil
+        
+        do {
+            let nextVideo = try await VideoManager.shared.findLeastSimilarVideo(for: boardVideos)
+            await MainActor.run {
+                updatePlayer(with: nextVideo)
+                isLoading = false
             }
-        } while retryCount < maxRetries
+        } catch {
+            await MainActor.run {
+                self.error = error
+                isLoading = false
+            }
+        }
+    }
+    
+    func loadNextSortedVideo() async {
+        isLoading = true
+        error = nil
+        
+        do {
+            let nextVideo = try await VideoManager.shared.getNextSortedVideo(currentBoardVideos: boardVideos)
+            await MainActor.run {
+                updatePlayer(with: nextVideo)
+                isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                self.error = error
+                isLoading = false
+            }
+        }
+    }
+    
+    func retry() async {
+        await loadLeastSimilarVideo()
+    }
+    
+    private func updatePlayer(with video: CustomVideo) {
+        let videoURL = URL(string: video.url)!
+        let playerItem = AVPlayerItem(url: videoURL)
+        player.replaceCurrentItem(with: playerItem)
+        player.play()
     }
 }
 
-#if DEBUG
-struct VideoPlayerView_Previews: PreviewProvider {
-    static var previews: some View {
-        VideoPlayerView(
-            url: URL(string: "https://example.com/video.mp4")!,
-            index: 0,
-            videoManager: VideoManager.shared
-        )
-    }
-}
-#endif 
+#Preview {
+    VideoPlayerView(
+        video: CustomVideo(
+            id: "test-video",
+            url: "https://example.com/video.mp4",
+            thumbnailUrl: "https://example.com/thumbnail.jpg",
+            frameUrl: nil
+        ),
+        boardVideos: []
+    )
+} 

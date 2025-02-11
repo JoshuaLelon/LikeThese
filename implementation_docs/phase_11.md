@@ -725,3 +725,5 @@ LikeThese/
 ```
 
 That's it! This updated **Phase 11** implementation guide now includes all the clarified requirements and implementation details. The focus is on building a functional MVP that handles the core video similarity flow, with appropriate error handling and logging, while keeping the implementation straightforward and maintainable. 
+
+**Note**: For advanced features including dynamic frame extraction and sorted video queues, see [Phase 12](phase_12.md). 

@@ -1,37 +1,31 @@
 # Flow Diagram
+Note: All previous references to `thumbnailUrl` have been updated to use `frameUrl` for consistency with the new hybrid approach.
 ```
 graph LR
-    %% LOGIN FLOW
-    Start --> Decision{Sign Up or Log In}
-    Decision --> SignUp[Create Account]
+    Start --> AuthChoice{Sign Up or Log In}
+    AuthChoice --> SignUp[Create Account]
     SignUp --> OpenApp[Open App]
-    Decision --> LogIn[Log In]
+    AuthChoice --> LogIn[Log In]
     LogIn --> OpenApp
 
-    %% MAIN APP ENTRY
     OpenApp --> InspirationsBoard[View Inspirations Board]
+    InspirationsBoard --> SelectVideo[Tap a thumbnail to watch fullscreen]
+    SelectVideo --> PlayingVideo[Playing a video from board or random]
 
-    %% SELECT VIDEO FROM THE BOARD
-    InspirationsBoard --> SelectVideo[Tap a thumbnail to watch in fullscreen]
-    SelectVideo --> PlayingVideo[Playing video from board or random]
-
-    %% VIDEO PLAYER ACTIONS
-    PlayingVideo --> PauseResume[Tap to pause or resume]
+    PlayingVideo --> PauseResume[Tap to pause/resume]
     PlayingVideo --> SwipeDown[Swipe down to previous video]
     PlayingVideo --> BackToGrid[Swipe right, return to board]
-    PlayingVideo --> AutoplayNext[Autoplay next - random]
-    PlayingVideo --> SwipeUpFromPlayer[Swipe up - random next]
+    PlayingVideo --> AutoplayNext[Autoplay next video]
+    PlayingVideo --> SwipeUpFromPlayer[Swipe up → random next]
     AutoplayNext --> PlayingVideo
     SwipeUpFromPlayer --> PlayingVideo
 
-    %% SWIPING UP ON THE BOARD → AI LOGIC
     InspirationsBoard --> SingleSwipe[Swipe up on a thumbnail]
-    SingleSwipe --> CandidateFlow[Compute least similar via Replicate and LangSmith]
-
-    CandidateFlow --> ExtractFrames[Extract frames from candidate vids]
+    SingleSwipe --> CandidateFlow[Compute least similar via Replicate & LangSmith]
+    CandidateFlow --> ExtractFrames[Extract frames]
     ExtractFrames --> ComputeEmbeddings[Compute CLIP embeddings]
-    ComputeEmbeddings --> CompareEmbeddings[Compare vs board with cosine distance]
-    CompareEmbeddings --> PickLeastSimilar[Pick highest distance - least similar]
+    ComputeEmbeddings --> CompareEmbeddings[Compare to board]
+    CompareEmbeddings --> PickLeastSimilar[Highest distance → least similar]
     PickLeastSimilar --> GeneratePosterImage[Generate poster image]
     PickLeastSimilar --> LogRun[Log run in LangSmith]
     GeneratePosterImage --> LogRun
@@ -39,7 +33,6 @@ graph LR
     ReturnVideoID --> UpdateGrid[Update board with new video]
     UpdateGrid --> InspirationsBoard
 
-    %% LOG OUT
     InspirationsBoard --> Logout[Log out]
     Logout --> End
 ```
@@ -51,7 +44,7 @@ graph LR
 
 Below is a summary of the parse errors we ran into during this conversation, along with their root causes and how we fixed them.
 
-### 1) Error: “Parse error on line…” involving parentheses or quotes in node labels
+### 1) Error: "Parse error on line…" involving parentheses or quotes in node labels
 
 > **Example Snippet (Trigger)**  
 > ```
@@ -78,7 +71,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 
 ---
 
-### 2) Error: “Parse error on line…” involving curly quotes or special characters
+### 2) Error: "Parse error on line…" involving curly quotes or special characters
 
 > **Example Snippet (Trigger)**  
 > ```
@@ -93,7 +86,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 > ```
 >  
 > **Root Cause**  
-> Curly quotes (“ ”) or multi-line strings in a Mermaid label cause parse issues.  
+> Curly quotes (") or multi-line strings in a Mermaid label cause parse issues.  
 >  
 > **Fix**  
 > Replace curly quotes with straight quotes or remove quotes entirely. Also avoid abrupt line breaks.  
@@ -103,7 +96,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 
 ---
 
-### 3) Error: “Parse error on line…” when using code fences and markdown simultaneously
+### 3) Error: "Parse error on line…" when using code fences and markdown simultaneously
 
 > **Example Snippet (Trigger)**  
 > ```
@@ -125,7 +118,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 
 ---
 
-### 4) Error: “Parse error” whenever special punctuation or partial lines remained
+### 4) Error: "Parse error" whenever special punctuation or partial lines remained
 
 > **Example Snippet (Trigger)**  
 > ```
@@ -133,7 +126,7 @@ Below is a summary of the parse errors we ran into during this conversation, alo
 > Autoplay Next Video (Random)"
 > ```
 > **Root Cause**  
-> If punctuation like `(`, `'`, or `"` is placed in a node label incorrectly, Mermaid’s parser fails.  
+> If punctuation like `(`, `'`, or `"` is placed in a node label incorrectly, Mermaid's parser fails.  
 >  
 > **Fix**  
 > We replaced or removed parentheses and quotes, or used `\(` and `\)` as escapes where needed.  

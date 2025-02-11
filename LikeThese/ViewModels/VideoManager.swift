@@ -2,6 +2,23 @@ import Foundation
 import AVFoundation
 import Network
 import FirebaseStorage
+import FirebaseFirestore
+import FirebaseFunctions
+
+// Video model
+struct Video: Identifiable, Codable {
+    let id: String
+    let url: String
+    let thumbnailUrl: String
+    var frameUrl: String?
+}
+
+// Video errors
+enum VideoError: Error {
+    case invalidResponse
+    case videoNotFound
+    case networkError
+}
 
 enum VideoPlayerState: Equatable {
     case idle
@@ -99,6 +116,16 @@ enum TransitionState: Equatable {
 class VideoManager: NSObject, ObservableObject {
     // Singleton instance
     static let shared = VideoManager()
+    
+    // Firebase instances
+    private let db = Firestore.firestore()
+    private let functions = Functions.functions()
+    private let storage = Storage.storage()
+    
+    // Video data
+    @Published private(set) var videos: [Video] = []
+    @Published private(set) var sortedCandidates: [(videoId: String, distance: Double)] = []
+    @Published private(set) var nextVideoIndex: Int = 0
     
     // State tracking
     @Published private(set) var currentState: VideoPlayerState = .idle
@@ -962,5 +989,77 @@ class VideoManager: NSObject, ObservableObject {
         // Start the new transition immediately
         transitionState = newTransition
         completion()
+    }
+    
+    // Update findLeastSimilarVideo to store sorted queue
+    func findLeastSimilarVideo(for boardVideos: [Video], excluding: [String] = []) async throws -> Video {
+        let candidateVideos = videos.filter { video in
+            !boardVideos.contains { $0.id == video.id } && 
+            !excluding.contains(video.id)
+        }
+        
+        let data: [String: Any] = [
+            "boardVideos": boardVideos.map { [
+                "id": $0.id,
+                "url": $0.url,
+                "frameUrl": $0.frameUrl ?? $0.thumbnailUrl
+            ]},
+            "candidateVideos": candidateVideos.map { [
+                "id": $0.id,
+                "url": $0.url,
+                "frameUrl": $0.frameUrl ?? $0.thumbnailUrl
+            ]}
+        ]
+        
+        let result = try await functions.httpsCallable("findLeastSimilarVideo").call(data)
+        guard let response = result.data as? [String: Any],
+              let chosenId = response["chosen"] as? String else {
+            throw VideoError.invalidResponse
+        }
+        
+        // Store sorted candidates if available
+        if let sortedList = response["sortedCandidates"] as? [[String: Any]] {
+            self.sortedCandidates = sortedList.compactMap { candidate in
+                guard let videoId = candidate["videoId"] as? String,
+                      let distance = candidate["distance"] as? Double else {
+                    return nil
+                }
+                return (videoId: videoId, distance: distance)
+            }
+            self.nextVideoIndex = 0
+        }
+        
+        guard let video = videos.first(where: { $0.id == chosenId }) else {
+            throw VideoError.videoNotFound
+        }
+        
+        return video
+    }
+    
+    // Add function to get next video from sorted queue
+    func getNextSortedVideo(currentBoardVideos: [Video]) async throws -> Video {
+        // If we've reached the end or have no sorted candidates, get a fresh list
+        if nextVideoIndex >= sortedCandidates.count || sortedCandidates.isEmpty {
+            let video = try await findLeastSimilarVideo(for: currentBoardVideos)
+            // findLeastSimilarVideo will refresh sortedCandidates and reset nextVideoIndex
+            return video
+        }
+        
+        // Get next video from sorted list
+        let nextCandidate = sortedCandidates[nextVideoIndex]
+        guard let video = videos.first(where: { $0.id == nextCandidate.videoId }) else {
+            throw VideoError.videoNotFound
+        }
+        
+        // Increment index for next time
+        nextVideoIndex += 1
+        
+        return video
+    }
+    
+    // Add function to reset sorted queue
+    func resetSortedQueue() {
+        sortedCandidates = []
+        nextVideoIndex = 0
     }
 } 

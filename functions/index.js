@@ -5,6 +5,9 @@ const Replicate = require("replicate");
 const axios = require("axios");
 const { Client } = require("langsmith");
 const config = require("./config");
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 admin.initializeApp();
 
@@ -114,11 +117,22 @@ async function getEmbeddingsWithCache(videos) {
                 if (!replicateInstance) {
                     replicateInstance = await initializeReplicate();
                 }
-                // Compute new embedding
-                const thumbnailUrl = video.thumbnailUrl;
-                const newEmbedding = await getClipEmbedding(thumbnailUrl, replicateInstance);
-                clipEmbeddingCache.set(video.id, newEmbedding);
-                results.push({ videoId: video.id, embedding: newEmbedding, source: 'computed' });
+                // Compute new embedding using frameUrl instead of thumbnailUrl
+                const frameUrl = video.frameUrl;
+                if (!frameUrl) {
+                    console.warn(`⚠️ No frameUrl found for video ${video.id}, extracting frame...`);
+                    const { frameUrl: newFrameUrl } = await exports.extractVideoFrame({
+                        videoUrl: video.url,
+                        videoId: video.id
+                    });
+                    const newEmbedding = await getClipEmbedding(newFrameUrl, replicateInstance);
+                    clipEmbeddingCache.set(video.id, newEmbedding);
+                    results.push({ videoId: video.id, embedding: newEmbedding, source: 'computed_new' });
+                } else {
+                    const newEmbedding = await getClipEmbedding(frameUrl, replicateInstance);
+                    clipEmbeddingCache.set(video.id, newEmbedding);
+                    results.push({ videoId: video.id, embedding: newEmbedding, source: 'computed' });
+                }
             }
         }
     }
@@ -305,6 +319,18 @@ function cosineDistance(vecA, vecB) {
   return 1 - (dot / (normA * normB));
 }
 
+// Compute average embedding from an array of embeddings
+function computeAverageEmbedding(embeddingsArray) {
+  const length = embeddingsArray[0].length;
+  const sum = Array(length).fill(0);
+  for (const emb of embeddingsArray) {
+    for (let i = 0; i < length; i++) {
+      sum[i] += emb[i];
+    }
+  }
+  return sum.map(val => val / embeddingsArray.length);
+}
+
 // Main function to handle video replacement
 exports.findLeastSimilarVideo = functions.https.onCall({
   timeoutSeconds: 60,
@@ -352,13 +378,17 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     
     // Track metrics
     boardEmbeddingsResults.forEach(r => {
-        metrics.embeddingTimes.push({
-            type: 'board',
-            id: r.videoId,
-            source: r.source
-        });
+      metrics.embeddingTimes.push({
+        type: 'board',
+        id: r.videoId,
+        source: r.source
+      });
     });
     metrics.totalEmbeddingTime += Date.now() - boardEmbeddingsStart;
+
+    // Compute board average embedding
+    console.log("📊 Computing board average embedding");
+    const boardAverageEmbedding = computeAverageEmbedding(boardEmbeddings);
 
     // Get candidate video embeddings with caching
     const candidateEmbeddingsStart = Date.now();
@@ -366,39 +396,23 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     
     // Track metrics
     candidateEmbeddingsResults.forEach(r => {
-        metrics.embeddingTimes.push({
-            type: 'candidate',
-            id: r.videoId,
-            source: r.source
-        });
+      metrics.embeddingTimes.push({
+        type: 'candidate',
+        id: r.videoId,
+        source: r.source
+      });
     });
     metrics.totalEmbeddingTime += Date.now() - candidateEmbeddingsStart;
 
-    // Find the most dissimilar video
-    const distanceStart = Date.now();
-    let bestVideoId = null;
-    let bestScore = -1;
-    const distances = [];
-
-    for (const candidate of candidateEmbeddingsResults) {
-        let totalDistance = 0;
-        const candidateDistances = [];
-        for (const boardEmbedding of boardEmbeddings) {
-            const distance = cosineDistance(candidate.embedding, boardEmbedding);
-            totalDistance += distance;
-            candidateDistances.push(distance);
-        }
-        distances.push({
-            videoId: candidate.videoId,
-            distances: candidateDistances,
-            total: totalDistance
-        });
-        if (totalDistance > bestScore) {
-            bestScore = totalDistance;
-            bestVideoId = candidate.videoId;
-        }
-    }
-    const distanceTime = Date.now() - distanceStart;
+    // Compute distances and sort candidates
+    console.log("🔄 Computing distances and sorting candidates");
+    const sortedCandidates = candidateEmbeddingsResults.map(candidate => {
+      const distance = cosineDistance(candidate.embedding, boardAverageEmbedding);
+      return {
+        videoId: candidate.videoId,
+        distance
+      };
+    }).sort((a, b) => a.distance - b.distance);
 
     // Generate poster image if prompt provided
     let posterImageUrl = null;
@@ -427,14 +441,12 @@ exports.findLeastSimilarVideo = functions.https.onCall({
               textPrompt: request.data.textPrompt
             },
             outputs: {
-              chosen: bestVideoId,
-              score: bestScore,
+              sortedCandidates,
               posterImageUrl,
               metrics: {
                 ...metrics,
-                distanceCalculationTime: distanceTime,
                 posterGenerationTime: posterTime,
-                distances
+                boardAverageComputed: true
               }
             },
             start_time: new Date(startTime).toISOString(),
@@ -452,8 +464,9 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     }
 
     return {
-      chosen: bestVideoId,
-      score: bestScore,
+      chosen: sortedCandidates[0].videoId, // Most similar to average
+      sortedCandidates, // Full sorted list
+      score: sortedCandidates[0].distance,
       posterImageUrl
     };
 
@@ -496,5 +509,128 @@ exports.findLeastSimilarVideo = functions.https.onCall({
       error = new functions.https.HttpsError('internal', ERROR_MESSAGES.GENERAL, error);
     }
     throw error;
+  }
+});
+
+// Extract first frame from video
+async function extractSingleFrame(videoUrl, outputPath) {
+  console.log(`🎬 Extracting first frame from ${videoUrl}`);
+  
+  try {
+    // Download video to temp file
+    const response = await axios({
+      method: 'GET',
+      url: videoUrl,
+      responseType: 'stream'
+    });
+
+    // Create a promise to handle the ffmpeg process
+    return new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(response.data)
+        .frames(1)
+        .outputOptions('-q:v', '2')  // High quality JPEG
+        .output(outputPath)
+        .on('end', () => {
+          console.log('✅ Frame extraction complete');
+          resolve(outputPath);
+        })
+        .on('error', (err) => {
+          console.error('❌ Frame extraction error:', err);
+          reject(err);
+        })
+        .run();
+    });
+  } catch (error) {
+    console.error('❌ Frame extraction failed:', error);
+    throw new functions.https.HttpsError('internal', ERROR_MESSAGES.FRAME_EXTRACTION, error);
+  }
+}
+
+// Upload frame to Firebase Storage
+async function uploadFrameToStorage(localPath, videoId) {
+  console.log(`📤 Uploading frame for video ${videoId}`);
+  
+  try {
+    const bucket = admin.storage().bucket();
+    const destination = `frames/${videoId}.jpg`;
+    
+    await bucket.upload(localPath, {
+      destination,
+      metadata: {
+        contentType: 'image/jpeg',
+      },
+    });
+    
+    // Get the public URL
+    const [file] = await bucket.file(destination).getSignedUrl({
+      action: 'read',
+      expires: '03-01-2500', // Far future expiration
+    });
+    
+    console.log('✅ Frame uploaded successfully');
+    return file;
+  } catch (error) {
+    console.error('❌ Frame upload failed:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to upload frame', error);
+  }
+}
+
+// Function to extract and store frame
+exports.extractVideoFrame = functions.https.onCall({
+  timeoutSeconds: 120,
+  memory: "2GiB",
+}, async (data, context) => {
+  const { videoUrl, videoId } = data;
+  
+  if (!videoUrl || !videoId) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      'Missing required fields: videoUrl and videoId'
+    );
+  }
+
+  try {
+    // First check if the video document already has a thumbnail
+    const videoDoc = await admin.firestore()
+      .collection('videos')
+      .doc(videoId)
+      .get();
+
+    const videoData = videoDoc.data();
+    
+    // If thumbnail exists, use it as the frame
+    if (videoData?.thumbnailUrl) {
+      console.log('✅ Using existing thumbnail as frame for video:', videoId);
+      await videoDoc.ref.update({
+        frameUrl: videoData.thumbnailUrl,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      return { frameUrl: videoData.thumbnailUrl };
+    }
+
+    // If no thumbnail exists, extract first frame
+    console.log('🎬 No thumbnail found, extracting first frame for video:', videoId);
+    const os = require('os');
+    const path = require('path');
+    const outputPath = path.join(os.tmpdir(), `${videoId}.jpg`);
+    
+    // Extract frame
+    await extractSingleFrame(videoUrl, outputPath);
+    
+    // Upload to Firebase Storage
+    const frameUrl = await uploadFrameToStorage(outputPath, videoId);
+    
+    // Update Firestore document with both frameUrl and thumbnailUrl
+    await videoDoc.ref.update({
+      frameUrl,
+      thumbnailUrl: frameUrl, // Use the same URL for both fields
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    return { frameUrl };
+  } catch (error) {
+    console.error('❌ Frame extraction process failed:', error);
+    throw new functions.https.HttpsError('internal', ERROR_MESSAGES.FRAME_EXTRACTION, error);
   }
 }); 

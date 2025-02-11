@@ -127,6 +127,7 @@ async function createDocument(basename) {
         id: basename,
         url: video_url,
         thumbnailUrl: thumbnail_url,
+        frameUrl: thumbnail_url, // Use thumbnail as frame
         signedVideoUrl: signed_video_url,
         signedThumbnailUrl: signed_thumbnail_url,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
@@ -142,8 +143,9 @@ async function createDocument(basename) {
         id: basename,
         url: video_url,
         thumbnailUrl: thumbnail_url,
+        frameUrl: thumbnail_url,
         signedVideoUrl: '(signed url)',
-        signedThumbnailUrl: signed_thumbnail_url ? '(signed url)' : null,
+        signedThumbnailUrl: '(signed url)',
         videoPath: `videos/${basename}.mp4`,
         thumbnailPath: `thumbnails/${basename}.jpg`,
         clipEmbedding: '(embedding array)'
@@ -160,25 +162,35 @@ async function updateDocument(basename) {
         return createDocument(basename);
     }
 
+    const data = doc.data();
+    
+    // If document exists but doesn't have frameUrl, add it
+    if (!data.frameUrl && data.thumbnailUrl) {
+        console.log(`🔄 Adding frameUrl using existing thumbnailUrl for ${basename}`);
+        await doc.ref.update({
+            frameUrl: data.thumbnailUrl
+        });
+    }
+
     // Check if CLIP embedding already exists
     if (await hasClipEmbedding(basename)) {
         console.log(`✅ Using existing CLIP embedding for ${basename}`);
         return;
     }
 
-    // Get a fresh signed URL for the thumbnail
-    const signedThumbnailUrl = await getSignedUrl(`thumbnails/${basename}.jpg`);
-    if (!signedThumbnailUrl) {
-        console.error(`⚠️ Failed to get signed URL for thumbnail: ${basename}`);
+    // Get a fresh signed URL for the thumbnail/frame
+    const signedUrl = await getSignedUrl(data.frameUrl ? 'frames/${basename}.jpg' : `thumbnails/${basename}.jpg`);
+    if (!signedUrl) {
+        console.error(`⚠️ Failed to get signed URL for thumbnail/frame: ${basename}`);
         return;
     }
 
     console.log(`🔄 Computing CLIP embedding for ${basename}...`);
-    const clipEmbedding = await getClipEmbedding(signedThumbnailUrl);
+    const clipEmbedding = await getClipEmbedding(signedUrl);
     console.log(`✅ Successfully computed CLIP embedding`);
 
     console.log(`\n💾 Updating document in Firestore...`);
-    await db.collection('videos').doc(basename).update({
+    await doc.ref.update({
         clipEmbedding: clipEmbedding
     });
     console.log(`✅ Successfully updated document for ${basename} with CLIP embedding`);

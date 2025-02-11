@@ -303,10 +303,23 @@ struct VideoPlaybackView: View {
                 }
                 
                 // Try to get next video from sorted queue if in fullscreen
-                let nextVideo = if isFullscreen {
-                    try await viewModel.getNextSortedVideo()
+                let nextVideo: LikeTheseVideo?
+                if isFullscreen {
+                    do {
+                        nextVideo = try await viewModel.getNextSortedVideo()
+                    } catch {
+                        print("❌ End of sorted queue reached: \(error.localizedDescription)")
+                        // Return to grid view when we reach the end of the queue
+                        await MainActor.run {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isFullscreen = false
+                            }
+                            dismiss()
+                        }
+                        nextVideo = nil
+                    }
                 } else {
-                    viewModel.getNextVideo(from: current)
+                    nextVideo = viewModel.getNextVideo(from: current)
                 }
                 
                 if let nextVideo = nextVideo,
@@ -317,6 +330,13 @@ struct VideoPlaybackView: View {
                     // Prepare next video but don't start playing yet
                     if let player = videoManager.player(for: current + 1) {
                         await player.seek(to: .zero)
+                    }
+                    
+                    // Update videos array if needed
+                    await MainActor.run {
+                        if current + 1 >= viewModel.videos.count {
+                            viewModel.videos.append(nextVideo)
+                        }
                     }
                     
                     // Animate old video up while bringing new video in
@@ -333,21 +353,6 @@ struct VideoPlaybackView: View {
                         transitionState = .none
                         offset = 0
                         videoManager.finishTransition(at: current + 1)
-                    }
-                    
-                    // Preload next 12 videos in background
-                    Task {
-                        // Preload in batches of 3 to avoid overwhelming the system
-                        for batchStart in stride(from: 2, to: 13, by: 3) {
-                            for offset in batchStart...(min(batchStart + 2, 12)) {
-                                if let futureVideo = viewModel.getNextVideo(from: current + offset - 1),
-                                   let futureUrl = URL(string: futureVideo.url) {
-                                    try? await videoManager.preloadVideo(url: futureUrl, forIndex: current + offset)
-                                }
-                            }
-                            // Small delay between batches
-                            try? await Task.sleep(nanoseconds: 100_000_000)
-                        }
                     }
                 }
             } catch {

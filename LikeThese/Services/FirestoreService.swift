@@ -11,6 +11,7 @@ enum FirestoreError: Error {
     case networkError(Error)
     case maxRetriesReached
     case documentNotFound(String)
+    case videoNotFound
     
     var localizedDescription: String {
         switch self {
@@ -26,6 +27,8 @@ enum FirestoreError: Error {
             return "Failed after maximum retry attempts"
         case .documentNotFound(let id):
             return "Document not found: \(id)"
+        case .videoNotFound:
+            return "Video not found"
         }
     }
 }
@@ -524,5 +527,18 @@ class FirestoreService: ObservableObject {
         // For now, just get a random video that's not in the current board
         let excludedIds = currentBoardVideos.map { $0.id }
         return try await findLeastSimilarVideo(excluding: excludedIds)
+    }
+    
+    func fetchVideoById(_ videoId: String) async throws -> LikeTheseVideo {
+        print("🔍 Fetching video by ID: \(videoId)")
+        let snapshot = try await db.collection("videos")
+            .whereField("id", isEqualTo: videoId)
+            .getDocuments()
+        
+        guard let document = snapshot.documents.first else {
+            throw FirestoreError.videoNotFound
+        }
+        
+        return try await validateVideoData(document.data(), documentId: document.documentID)
     }
 } 

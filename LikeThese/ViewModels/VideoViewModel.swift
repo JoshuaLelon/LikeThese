@@ -221,11 +221,15 @@ class VideoViewModel: ObservableObject {
                     throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "No candidate videos available"])
                 }
                 
-                // Find least similar video using AI
+                // Find least similar video using AI and create sorted queue
                 let newVideo = try await findLeastSimilarVideo(
                     boardVideos: boardVideos,
                     candidateVideos: candidateVideos
                 )
+                
+                // Create sorted queue based on the swiped video
+                try await createSortedQueue(from: newVideo, boardVideos: boardVideos)
+                print("✅ Created sorted queue from swiped video")
                 
                 // Update videos array atomically
                 await MainActor.run {
@@ -269,13 +273,19 @@ class VideoViewModel: ObservableObject {
                 let token = try await currentUser.getIDToken()
                 print("🎫 Got fresh token (length: \(token.count)) for user: \(currentUser.uid)")
                 
+                // Get all videos except those on the board for candidates
+                let allCandidates = try await firestoreService.fetchVideos()
+                let filteredCandidates = allCandidates.filter { candidate in
+                    !boardVideos.contains { $0.id == candidate.id }
+                }
+                
                 let data: [String: Any] = [
                     "boardVideos": boardVideos.map { [
                         "id": $0.id,
                         "thumbnailUrl": $0.thumbnailUrl ?? "",
                         "frameUrl": $0.frameUrl ?? $0.thumbnailUrl ?? ""
                     ]},
-                    "candidateVideos": candidateVideos.map { [
+                    "candidateVideos": filteredCandidates.map { [
                         "id": $0.id,
                         "thumbnailUrl": $0.thumbnailUrl ?? "",
                         "frameUrl": $0.frameUrl ?? $0.thumbnailUrl ?? ""
@@ -283,7 +293,7 @@ class VideoViewModel: ObservableObject {
                     "auth": ["token": token]
                 ]
                 
-                print("📤 Calling findLeastSimilarVideo with \(boardVideos.count) board videos and \(candidateVideos.count) candidates")
+                print("📤 Calling findLeastSimilarVideo with \(boardVideos.count) board videos and \(filteredCandidates.count) candidates")
                 let result = try await functions.httpsCallable("findLeastSimilarVideo").call(data)
                 print("📥 Received response from findLeastSimilarVideo")
                 
@@ -306,7 +316,7 @@ class VideoViewModel: ObservableObject {
                 }
                 
                 // Find the chosen video in our candidates
-                guard let chosen = candidateVideos.first(where: { $0.id == chosenId }) else {
+                guard let chosen = filteredCandidates.first(where: { $0.id == chosenId }) else {
                     print("❌ Chosen video \(chosenId) not found in candidates")
                     throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Chosen video not found in candidates"])
                 }
@@ -402,50 +412,148 @@ class VideoViewModel: ObservableObject {
     }
     
     func loadVideo(_ video: LikeTheseVideo, boardVideos: [LikeTheseVideo]) {
+        print("📥 QUEUE: Loading video \(video.id)")
+        print("📊 QUEUE: Setting board videos: \(boardVideos.map { $0.id })")
         self.currentVideo = video
         self.currentBoardVideos = boardVideos
+        
+        // Create initial sorted queue if needed
+        if sortedCandidates.isEmpty {
+            print("🔄 QUEUE: Creating initial sorted queue")
+            Task {
+                do {
+                    try await createSortedQueue(from: video, boardVideos: boardVideos)
+                } catch {
+                    print("❌ QUEUE: Failed to create initial sorted queue: \(error.localizedDescription)")
+                }
+            }
+        }
     }
     
     func findLeastSimilarVideo() async throws -> LikeTheseVideo {
         return try await firestoreService.findLeastSimilarVideo(excluding: currentBoardVideos.map { $0.id })
     }
     
-    func getNextSortedVideo() async throws -> LikeTheseVideo {
-        // If we've reached the end or have no sorted candidates, get a fresh list
-        if nextVideoIndex >= sortedCandidates.count || sortedCandidates.isEmpty {
-            print("🔄 Refreshing sorted candidates list")
-            // Get current board videos
-            let boardVideos = videos
-            
-            // Get a set of candidate videos
-            var candidateVideos: [LikeTheseVideo] = []
-            for _ in 0..<5 {
+    func createSortedQueue(from currentVideo: LikeTheseVideo, boardVideos: [LikeTheseVideo]) async throws {
+        print("🔄 QUEUE: Creating new sorted queue from current video: \(currentVideo.id)")
+        print("📊 QUEUE: Current board videos: \(boardVideos.map { $0.id })")
+
+        // Check authentication
+        guard let currentUser = Auth.auth().currentUser else {
+            print("❌ QUEUE: No authenticated user")
+            throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "User must be authenticated"])
+        }
+
+        // Get fresh token
+        let token = try await currentUser.getIDToken(forcingRefresh: true)
+        
+        // Get all videos except board videos for candidates
+        let allCandidates = try await firestoreService.fetchVideos()
+        print("📊 QUEUE: Math check:")
+        print("  - Total videos in store: \(allCandidates.count)")
+        print("  - Videos in grid: \(boardVideos.count)")
+        print("  - Expected queue size: \(allCandidates.count - boardVideos.count)")
+        
+        let filteredCandidates = allCandidates.filter { candidate in
+            !boardVideos.contains { $0.id == candidate.id }
+        }
+        print("  - Actual filtered candidates: \(filteredCandidates.count)")
+        
+        if filteredCandidates.count != allCandidates.count - boardVideos.count {
+            print("⚠️ QUEUE: Warning - Queue size mismatch!")
+            print("  - Missing \(allCandidates.count - boardVideos.count - filteredCandidates.count) videos")
+        }
+
+        let data: [String: Any] = [
+            "boardVideos": boardVideos.map { [
+                "id": $0.id,
+                "thumbnailUrl": $0.thumbnailUrl ?? "",
+                "frameUrl": $0.frameUrl ?? $0.thumbnailUrl ?? ""
+            ]},
+            "candidateVideos": filteredCandidates.map { [
+                "id": $0.id,
+                "thumbnailUrl": $0.thumbnailUrl ?? "",
+                "frameUrl": $0.frameUrl ?? $0.thumbnailUrl ?? ""
+            ]},
+            "auth": ["token": token]
+        ]
+        
+        print("📤 Creating sorted queue with \(boardVideos.count) board videos and \(filteredCandidates.count) candidates")
+        let result = try await functions.httpsCallable("findLeastSimilarVideo").call(data)
+        
+        guard let response = result.data as? [String: Any],
+              let sortedList = response["sortedCandidates"] as? [[String: Any]] else {
+            throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response when creating sorted queue"])
+        }
+        
+        print("📊 QUEUE: Received \(sortedList.count) sorted candidates")
+        self.sortedCandidates = sortedList.compactMap { candidate in
+            guard let videoId = candidate["videoId"] as? String,
+                  let distance = candidate["distance"] as? Double else {
+                print("⚠️ QUEUE: Invalid candidate format")
+                return nil
+            }
+            return (videoId: videoId, distance: distance)
+        }
+        print("📊 QUEUE: Final sorted queue size: \(self.sortedCandidates.count)")
+        print("📊 QUEUE: Sorted queue IDs: \(self.sortedCandidates.map { $0.videoId })")
+        self.nextVideoIndex = 0
+        print("🔄 QUEUE: Reset nextVideoIndex to 0")
+        
+        // Preload next video if available
+        if !self.sortedCandidates.isEmpty {
+            Task {
                 do {
-                    let video = try await firestoreService.fetchRandomVideo()
-                    if !videos.contains(where: { $0.id == video.id }) {
-                        candidateVideos.append(video)
-                    }
+                    let nextVideo = try await firestoreService.fetchVideoById(self.sortedCandidates[0].videoId)
+                    print("🔄 Preloaded next video in queue: \(nextVideo.id)")
                 } catch {
-                    print("❌ Error fetching candidate video: \(error.localizedDescription)")
+                    print("⚠️ Failed to preload next video: \(error.localizedDescription)")
                 }
             }
-            
-            // Find least similar video and get new sorted list
-            let newVideo = try await findLeastSimilarVideo(
-                boardVideos: boardVideos,
-                candidateVideos: candidateVideos
-            )
-            return newVideo
+        }
+    }
+    
+    func getNextSortedVideo() async throws -> LikeTheseVideo {
+        print("🔄 QUEUE: Getting next video. Current index: \(nextVideoIndex)")
+        print("📊 QUEUE: Current queue size: \(sortedCandidates.count)")
+        
+        // Only create queue if empty - this should only happen on first call
+        if sortedCandidates.isEmpty {
+            print("⚠️ QUEUE: Empty queue - this should only happen on first load")
+            guard let current = currentVideo else {
+                print("❌ QUEUE: No current video available")
+                throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "No current video available"])
+            }
+            try await createSortedQueue(from: current, boardVideos: currentBoardVideos)
+        }
+        
+        print("�� QUEUE: Queue state:")
+        print("  - Current index: \(nextVideoIndex)")
+        print("  - Queue size: \(sortedCandidates.count)")
+        print("  - Remaining videos: \(sortedCandidates.count - nextVideoIndex)")
+        
+        // Now check if we have valid candidates
+        guard !sortedCandidates.isEmpty else {
+            print("❌ QUEUE: Queue is empty after creation attempt")
+            throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create sorted candidates queue"])
+        }
+        
+        guard nextVideoIndex < sortedCandidates.count else {
+            print("❌ QUEUE: Reached end of queue at index \(nextVideoIndex)")
+            throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Reached end of sorted candidates queue"])
         }
         
         // Get next video from sorted list
         let nextCandidate = sortedCandidates[nextVideoIndex]
-        guard let video = videos.first(where: { $0.id == nextCandidate.videoId }) else {
-            throw NSError(domain: "VideoViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video not found in sorted candidates"])
-        }
+        print("🎯 QUEUE: Selected next video ID: \(nextCandidate.videoId) at index \(nextVideoIndex)")
+        
+        // Fetch the video from Firestore
+        let video = try await firestoreService.fetchVideoById(nextCandidate.videoId)
+        print("✅ QUEUE: Successfully fetched video: \(video.id)")
         
         // Increment index for next time
         nextVideoIndex += 1
+        print("🔄 QUEUE: Incremented nextVideoIndex to \(nextVideoIndex)")
         
         return video
     }
@@ -456,5 +564,18 @@ class VideoViewModel: ObservableObject {
     
     func updateBoardVideos(_ videos: [LikeTheseVideo]) {
         self.currentBoardVideos = videos
+    }
+    
+    // Add helper function to debug queue state
+    func debugQueueState() {
+        print("\n📊 QUEUE DEBUG STATE:")
+        print("  - Queue exists: \(!sortedCandidates.isEmpty)")
+        print("  - Queue size: \(sortedCandidates.count)")
+        print("  - Current index: \(nextVideoIndex)")
+        print("  - Board videos: \(currentBoardVideos.map { $0.id })")
+        if !sortedCandidates.isEmpty {
+            print("  - Next 3 videos in queue: \(sortedCandidates.dropFirst(nextVideoIndex).prefix(3).map { $0.videoId })")
+        }
+        print("")
     }
 } 

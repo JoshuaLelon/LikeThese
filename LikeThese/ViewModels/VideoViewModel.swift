@@ -3,19 +3,21 @@ import FirebaseFirestore
 import SwiftUI
 import FirebaseFunctions
 import FirebaseAuth
+import AVKit
 
 @MainActor
 class VideoViewModel: ObservableObject {
-    @Published var videos: [Video] = []
+    @Published var videos: [LikeTheseVideo] = []
     @Published var isLoading: Bool = false
     @Published var isLoadingMore: Bool = false
     @Published var error: Error?
     @Published var replacingVideoId: String?
     @Published private var loadingVideoIds: Set<String> = []
+    @Published var currentVideo: LikeTheseVideo?
     private let firestoreService = FirestoreService.shared
     private let pageSize = 4 // Only load 4 at a time
-    private var videoSequence: [Int: Video] = [:] // Track video sequence
-    private var videoBuffer: [Video] = [] // Buffer for extra videos
+    private var videoSequence: [Int: LikeTheseVideo] = [:] // Track video sequence
+    private var videoBuffer: [LikeTheseVideo] = [] // Buffer for extra videos
     private let minBufferSize = 8 // Increased from 4 to handle multi-remove
     private let maxBufferSize = 16 // Increased from 8 to handle multi-remove
     
@@ -26,6 +28,8 @@ class VideoViewModel: ObservableObject {
     
     // Initialize Firebase Functions with custom domain
     private let functions = Functions.functions(region: "us-central1")
+    
+    private var currentBoardVideos: [LikeTheseVideo] = []
     
     func isLoadingVideo(_ videoId: String) -> Bool {
         return loadingVideoIds.contains(videoId)
@@ -75,9 +79,9 @@ class VideoViewModel: ObservableObject {
     }
     
     func restorePreservedState() {
-        if let preservedVideos = self.preservedState["videos"] as? [Video] {
+        if let preservedVideos = self.preservedState["videos"] as? [LikeTheseVideo] {
             self.videos = preservedVideos
-            if let sequence = self.preservedState["videoSequence"] as? [Int: Video] {
+            if let sequence = self.preservedState["videoSequence"] as? [Int: LikeTheseVideo] {
                 self.videoSequence = sequence
             }
             if let indices = self.preservedState["lastKnownIndices"] as? [String: Int] {
@@ -149,18 +153,18 @@ class VideoViewModel: ObservableObject {
         }
     }
     
-    func getVideoAtIndex(_ index: Int) -> Video? {
+    func getVideoAtIndex(_ index: Int) -> LikeTheseVideo? {
         if index < videos.count {
             return videos[index]
         }
         return videoSequence[index]
     }
     
-    func getPreviousVideo(from index: Int) -> Video? {
+    func getPreviousVideo(from index: Int) -> LikeTheseVideo? {
         return videoSequence[index - 1]
     }
     
-    func getNextVideo(from currentIndex: Int) -> Video? {
+    func getNextVideo(from currentIndex: Int) -> LikeTheseVideo? {
         if currentIndex + 1 < videos.count {
             return videos[currentIndex + 1]
         }
@@ -168,7 +172,7 @@ class VideoViewModel: ObservableObject {
     }
     
     // Load a random video at a specific index
-    func loadRandomVideo(at index: Int) async throws -> Video {
+    func loadRandomVideo(at index: Int) async throws -> LikeTheseVideo {
         let video = try await firestoreService.fetchRandomVideo()
         await MainActor.run {
             if index < videos.count {
@@ -180,7 +184,7 @@ class VideoViewModel: ObservableObject {
     }
     
     // Add autoplay functionality
-    func appendAutoplayVideo(_ video: Video) {
+    func appendAutoplayVideo(_ video: LikeTheseVideo) {
         print("📥 Appending autoplay video: \(video.id)")
         let nextIndex = videos.count
         videos.append(video)
@@ -197,7 +201,7 @@ class VideoViewModel: ObservableObject {
                 let boardVideos = videos
                 
                 // Get a set of candidate videos
-                var candidateVideos: [Video] = []
+                var candidateVideos: [LikeTheseVideo] = []
                 for _ in 0..<5 {  // Get 5 candidates
                     do {
                         let video = try await firestoreService.fetchRandomVideo()
@@ -236,7 +240,7 @@ class VideoViewModel: ObservableObject {
         }
     }
     
-    func findLeastSimilarVideo(boardVideos: [Video], candidateVideos: [Video]) async throws -> Video {
+    func findLeastSimilarVideo(boardVideos: [LikeTheseVideo], candidateVideos: [LikeTheseVideo]) async throws -> LikeTheseVideo {
         // Add retry logic for network and auth issues
         for attempt in 0..<3 {
             do {
@@ -300,7 +304,7 @@ class VideoViewModel: ObservableObject {
             }
             
             // Fetch all replacement videos first
-            var replacements: [Video] = []
+            var replacements: [LikeTheseVideo] = []
             for _ in videoIds {
                 if let bufferedVideo = videoBuffer.first {
                     replacements.append(bufferedVideo)
@@ -333,14 +337,14 @@ class VideoViewModel: ObservableObject {
             Task {
                 if videoBuffer.count < minBufferSize {
                     do {
-                        let newBufferVideos = try await withThrowingTaskGroup(of: Video.self) { group in
+                        let newBufferVideos = try await withThrowingTaskGroup(of: LikeTheseVideo.self) { group in
                             for _ in 0..<(minBufferSize - videoBuffer.count) {
                                 group.addTask {
                                     try await self.firestoreService.fetchRandomVideo()
                                 }
                             }
                             
-                            var videos: [Video] = []
+                            var videos: [LikeTheseVideo] = []
                             for try await video in group {
                                 videos.append(video)
                             }
@@ -363,5 +367,26 @@ class VideoViewModel: ObservableObject {
                 }
             }
         }
+    }
+    
+    func loadVideo(_ video: LikeTheseVideo, boardVideos: [LikeTheseVideo]) {
+        self.currentVideo = video
+        self.currentBoardVideos = boardVideos
+    }
+    
+    func findLeastSimilarVideo() async throws -> LikeTheseVideo {
+        return try await firestoreService.findLeastSimilarVideo(excluding: currentBoardVideos.map { $0.id })
+    }
+    
+    func getNextSortedVideo() async throws -> LikeTheseVideo {
+        return try await firestoreService.getNextSortedVideo(currentBoardVideos: currentBoardVideos)
+    }
+    
+    func updateCurrentVideo(_ video: LikeTheseVideo) {
+        self.currentVideo = video
+    }
+    
+    func updateBoardVideos(_ videos: [LikeTheseVideo]) {
+        self.currentBoardVideos = videos
     }
 } 

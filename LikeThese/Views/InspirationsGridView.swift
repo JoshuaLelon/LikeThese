@@ -1,12 +1,13 @@
 import SwiftUI
+import FirebaseFirestore
 
 struct InspirationsGridView: View {
     @StateObject private var viewModel = VideoViewModel()
     @ObservedObject var videoManager: VideoManager
-    @State private var selectedVideo: Video?
+    @State private var selectedVideo: LikeTheseVideo?
     @State private var selectedIndex: Int?
     @State private var isVideoPlaybackActive = false
-    @State private var gridVideos: [Video] = []
+    @State private var gridVideos: [LikeTheseVideo] = []
     @State private var showError = false
     @State private var errorMessage: String?
     @State private var replacingVideoId: String?
@@ -59,6 +60,7 @@ struct InspirationsGridView: View {
     }
     
     private let columns = [
+        GridItem(.flexible()),
         GridItem(.flexible(), spacing: 0),
         GridItem(.flexible(), spacing: 0)
     ]
@@ -239,7 +241,7 @@ struct InspirationsGridView: View {
         }
     }
     
-    private func gridItem(video: Video, index: Int) -> some View {
+    private func gridItem(video: LikeTheseVideo, index: Int) -> some View {
         let isReplacing = video.id == viewModel.replacingVideoId
         let isLoading = isReplacing || viewModel.isLoadingVideo(video.id) || loadingSlots.contains(index)
         let isPreloadingThumbnail = preloadingThumbnails.contains(index)
@@ -253,7 +255,7 @@ struct InspirationsGridView: View {
             print("🔄 GRID ITEM: Preloading thumbnail for video \(video.id) at index \(index)")
         }
         
-        return AsyncImage(url: video.thumbnailUrl.flatMap { URL(string: $0) }) { phase in
+        return AsyncImage(url: URL(string: video.thumbnailUrl)) { phase in
             ZStack {
                 switch phase {
                 case .empty:
@@ -348,7 +350,7 @@ struct InspirationsGridView: View {
         .animation(.easeInOut, value: isLoading)
     }
     
-    private func fallbackVideoImage(video: Video, width: CGFloat, height: CGFloat) -> some View {
+    private func fallbackVideoImage(video: LikeTheseVideo, width: CGFloat, height: CGFloat) -> some View {
         Group {
             if let videoUrl = URL(string: video.url) {
                 AsyncImage(url: videoUrl) { phase in

@@ -29,11 +29,11 @@ struct VideoPlaybackView: View {
         case transitioning(from: Int, to: Int)
     }
     
-    let initialVideo: Video
+    let initialVideo: LikeTheseVideo
     let initialIndex: Int
-    let videos: [Video]
+    let videos: [LikeTheseVideo]
     
-    init(initialVideo: Video, initialIndex: Int, videos: [Video], videoManager: VideoManager, viewModel: VideoViewModel) {
+    init(initialVideo: LikeTheseVideo, initialIndex: Int, videos: [LikeTheseVideo], videoManager: VideoManager, viewModel: VideoViewModel) {
         self.initialVideo = initialVideo
         self.initialIndex = initialIndex
         self.videos = videos
@@ -51,44 +51,36 @@ struct VideoPlaybackView: View {
                 if let currentIndex = currentIndex,
                    let video = videos[safe: currentIndex],
                    let url = URL(string: video.url) {
-                    VideoPlayerView(
-                        url: url,
-                        index: currentIndex,
-                        videoManager: videoManager
-                    )
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .ignoresSafeArea()
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                isGestureActive = true
-                                if abs(value.translation.width) > abs(value.translation.height) {
-                                    horizontalOffset = value.translation.width
-                                    offset = 0
-                                } else {
-                                    offset = value.translation.height
-                                    horizontalOffset = 0
+                    VideoPlayer(player: videoManager.player(for: currentIndex))
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .ignoresSafeArea()
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    isGestureActive = true
+                                    if abs(value.translation.width) > abs(value.translation.height) {
+                                        horizontalOffset = value.translation.width
+                                        offset = 0
+                                    } else {
+                                        offset = value.translation.height
+                                        horizontalOffset = 0
+                                    }
                                 }
-                            }
-                            .onEnded { value in
-                                handleDragGesture(value, geometry: geometry)
-                            }
-                    )
+                                .onEnded { value in
+                                    handleDragGesture(value, geometry: geometry)
+                                }
+                        )
                 }
                 
                 // Only the incoming video moves in or out
                 if case .transitioning(_, let toIndex) = transitionState,
                    let video = videos[safe: toIndex],
                    let url = URL(string: video.url) {
-                    VideoPlayerView(
-                        url: url,
-                        index: toIndex,
-                        videoManager: videoManager
-                    )
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .ignoresSafeArea()
-                    .offset(y: incomingOffset)
-                    .opacity(1 - transitionOpacity)
+                    VideoPlayer(player: videoManager.player(for: toIndex))
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .ignoresSafeArea()
+                        .offset(y: incomingOffset)
+                        .opacity(1 - transitionOpacity)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -386,21 +378,18 @@ struct VideoPlaybackView: View {
     }
 }
 
-#if DEBUG
-struct VideoPlaybackView_Previews: PreviewProvider {
-    static var previews: some View {
-        VideoPlaybackView(
-            initialVideo: Video(
-                id: "1",
-                url: "https://example.com/video1.mp4",
-                thumbnailUrl: nil,
-                timestamp: Timestamp(date: Date())
-            ),
-            initialIndex: 0,
-            videos: [],
-            videoManager: VideoManager.shared,
-            viewModel: VideoViewModel()
-        )
-    }
-}
-#endif 
+#Preview {
+    VideoPlaybackView(
+        initialVideo: LikeTheseVideo(
+            id: "test-video",
+            url: "https://example.com/video.mp4",
+            thumbnailUrl: "https://example.com/thumbnail.jpg",
+            frameUrl: nil,
+            timestamp: Timestamp(date: Date())
+        ),
+        initialIndex: 0,
+        videos: [],
+        videoManager: VideoManager.shared,
+        viewModel: VideoViewModel()
+    )
+} 

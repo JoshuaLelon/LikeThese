@@ -2,9 +2,6 @@ import SwiftUI
 import AVKit
 import FirebaseFirestore
 
-// Import our custom Video model from VideoManager
-typealias CustomVideo = LikeThese.Video
-
 struct VideoPlayerView: View {
     @StateObject private var viewModel: VideoPlayerViewModel
     @Environment(\.presentationMode) var presentationMode
@@ -12,7 +9,7 @@ struct VideoPlayerView: View {
     // Add state for fullscreen mode
     @State private var isFullscreen = false
     
-    init(video: CustomVideo, boardVideos: [CustomVideo]) {
+    init(video: LikeTheseVideo, boardVideos: [LikeTheseVideo]) {
         _viewModel = StateObject(wrappedValue: VideoPlayerViewModel(video: video, boardVideos: boardVideos))
     }
     
@@ -84,10 +81,10 @@ class VideoPlayerViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var error: Error?
     
-    private let video: CustomVideo
-    private let boardVideos: [CustomVideo]
+    private let video: LikeTheseVideo
+    private let boardVideos: [LikeTheseVideo]
     
-    init(video: CustomVideo, boardVideos: [CustomVideo]) {
+    init(video: LikeTheseVideo, boardVideos: [LikeTheseVideo]) {
         self.video = video
         self.boardVideos = boardVideos
         self.player = AVPlayer(url: URL(string: video.url)!)
@@ -133,7 +130,7 @@ class VideoPlayerViewModel: ObservableObject {
         await loadLeastSimilarVideo()
     }
     
-    private func updatePlayer(with video: CustomVideo) {
+    private func updatePlayer(with video: LikeTheseVideo) {
         let videoURL = URL(string: video.url)!
         let playerItem = AVPlayerItem(url: videoURL)
         player.replaceCurrentItem(with: playerItem)
@@ -143,11 +140,12 @@ class VideoPlayerViewModel: ObservableObject {
 
 #Preview {
     VideoPlayerView(
-        video: CustomVideo(
+        video: LikeTheseVideo(
             id: "test-video",
             url: "https://example.com/video.mp4",
             thumbnailUrl: "https://example.com/thumbnail.jpg",
-            frameUrl: nil
+            frameUrl: nil,
+            timestamp: Timestamp(date: Date())
         ),
         boardVideos: []
     )

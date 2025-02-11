@@ -10,6 +10,7 @@ enum FirestoreError: Error {
     case invalidVideoData
     case networkError(Error)
     case maxRetriesReached
+    case documentNotFound(String)
     
     var localizedDescription: String {
         switch self {
@@ -23,11 +24,13 @@ enum FirestoreError: Error {
             return "Network error: \(error.localizedDescription)"
         case .maxRetriesReached:
             return "Failed after maximum retry attempts"
+        case .documentNotFound(let id):
+            return "Document not found: \(id)"
         }
     }
 }
 
-class FirestoreService {
+class FirestoreService: ObservableObject {
     static let shared = FirestoreService()
     private let db = Firestore.firestore()
     private let storage = Storage.storage()
@@ -35,6 +38,8 @@ class FirestoreService {
     private var isNetworkAvailable = true
     private let maxRetries = 3
     private let retryDelay: UInt64 = 1_000_000_000 // 1 second in nanoseconds
+    
+    @Published private(set) var videos: [LikeTheseVideo] = []
     
     private init() {
         print("🔥 FirestoreService initialized")
@@ -109,7 +114,7 @@ class FirestoreService {
         }
     }
     
-    private func validateVideoData(_ data: [String: Any], documentId: String) async throws -> Video {
+    private func validateVideoData(_ data: [String: Any], documentId: String) async throws -> LikeTheseVideo {
         print("🔄 Validating video data for document: \(documentId)")
         print("📄 Document data: \(data)")
         
@@ -117,7 +122,7 @@ class FirestoreService {
         if let signedVideoUrl = data["signedVideoUrl"] as? String,
            let signedThumbnailUrl = data["signedThumbnailUrl"] as? String {
             print("✅ Using pre-signed URLs")
-            let video = Video(
+            let video = LikeTheseVideo(
                 id: documentId,
                 url: signedVideoUrl,
                 thumbnailUrl: signedThumbnailUrl,
@@ -131,9 +136,10 @@ class FirestoreService {
         // Fallback to generating signed URLs from paths
         if let videoPath = data["videoPath"] as? String {
             let videoURL = try await getSignedURL(for: videoPath).absoluteString
-            let thumbnailURL = try? await getSignedURL(for: data["thumbnailPath"] as? String ?? "").absoluteString
+            let thumbnailPath = data["thumbnailPath"] as? String ?? videoPath
+            let thumbnailURL = try await getSignedURL(for: thumbnailPath).absoluteString
             
-            let video = Video(
+            let video = LikeTheseVideo(
                 id: documentId,
                 url: videoURL,
                 thumbnailUrl: thumbnailURL,
@@ -141,9 +147,7 @@ class FirestoreService {
             )
             print("✅ Generated new signed URLs from paths")
             print("📄 Video URL: \(videoURL)")
-            if let thumbURL = thumbnailURL {
-                print("📄 Thumbnail URL: \(thumbURL)")
-            }
+            print("📄 Thumbnail URL: \(thumbnailURL)")
             return video
         }
         
@@ -174,7 +178,7 @@ class FirestoreService {
         }
         
         // Get thumbnail URL - either from direct URL or storage path
-        let thumbnailURL: String?
+        let thumbnailURL: String
         if let url = data["thumbnailUrl"] as? String {
             // Convert storage URL to storage path
             if url.contains("storage.googleapis.com") {
@@ -184,8 +188,8 @@ class FirestoreService {
                     thumbnailURL = try await getSignedURL(for: storagePath).absoluteString
                     print("✅ Generated signed thumbnail URL from storage URL")
                 } else {
-                    print("⚠️ Invalid thumbnail URL format: \(url), continuing without thumbnail")
-                    thumbnailURL = nil
+                    print("⚠️ Invalid thumbnail URL format: \(url), using video URL")
+                    thumbnailURL = videoURL
                 }
             } else {
                 thumbnailURL = url
@@ -196,26 +200,25 @@ class FirestoreService {
                 thumbnailURL = try await getSignedURL(for: thumbnailPath).absoluteString
                 print("✅ Generated signed thumbnail URL from storage path")
             } catch {
-                print("⚠️ Failed to get thumbnail URL, continuing without thumbnail: \(error.localizedDescription)")
-                thumbnailURL = nil
+                print("⚠️ Failed to get thumbnail URL, using video URL: \(error.localizedDescription)")
+                thumbnailURL = videoURL
             }
         } else {
-            thumbnailURL = nil
-            print("ℹ️ No thumbnail URL or path found")
+            thumbnailURL = videoURL
+            print("ℹ️ No thumbnail URL or path found, using video URL")
         }
         
-        let video = Video(
+        print("✅ Successfully validated video data for: \(documentId)")
+        print("📄 Video URL: \(videoURL)")
+        print("📄 Thumbnail URL: \(thumbnailURL)")
+        
+        let video = LikeTheseVideo(
             id: documentId,
             url: videoURL,
             thumbnailUrl: thumbnailURL,
             timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
         )
         
-        print("✅ Successfully validated video data for: \(documentId)")
-        print("📄 Video URL: \(videoURL)")
-        if let thumbURL = thumbnailURL {
-            print("📄 Thumbnail URL: \(thumbURL)")
-        }
         return video
     }
     
@@ -246,7 +249,7 @@ class FirestoreService {
         throw FirestoreError.maxRetriesReached
     }
     
-    func fetchInitialVideos(limit: Int) async throws -> [Video] {
+    func fetchInitialVideos(limit: Int) async throws -> [LikeTheseVideo] {
         print("📥 Fetching initial \(limit) videos")
         
         return try await executeWithRetry { [weak self] in
@@ -263,7 +266,7 @@ class FirestoreService {
                 throw FirestoreError.emptyVideoCollection
             }
             
-            var videos: [Video] = []
+            var videos: [LikeTheseVideo] = []
             for document in snapshot.documents {
                 let data = document.data()
                 print("🔄 Processing document: \(document.documentID)")
@@ -277,7 +280,7 @@ class FirestoreService {
                 while videos.count < limit {
                     // Take a random video from the existing ones and create a copy
                     if let originalVideo = videos.randomElement() {
-                        let replicatedVideo = Video(
+                        let replicatedVideo = LikeTheseVideo(
                             id: "\(originalVideo.id)_replica_\(UUID().uuidString)",
                             url: originalVideo.url,
                             thumbnailUrl: originalVideo.thumbnailUrl,
@@ -292,7 +295,7 @@ class FirestoreService {
         }
     }
     
-    func fetchMoreVideos(after lastVideoId: String, limit: Int) async throws -> [Video] {
+    func fetchMoreVideos(after lastVideoId: String, limit: Int) async throws -> [LikeTheseVideo] {
         print("📥 Fetching \(limit) more videos after \(lastVideoId)")
         
         return try await executeWithRetry { [weak self] in
@@ -319,7 +322,7 @@ class FirestoreService {
                 throw FirestoreError.emptyVideoCollection
             }
             
-            var videos: [Video] = []
+            var videos: [LikeTheseVideo] = []
             for document in snapshot.documents {
                 let data = document.data()
                 let video = try await validateVideoData(data, documentId: document.documentID)
@@ -329,7 +332,7 @@ class FirestoreService {
         }
     }
     
-    func fetchReplacementVideo(excluding currentVideoId: String) async throws -> Video {
+    func fetchReplacementVideo(excluding currentVideoId: String) async throws -> LikeTheseVideo {
         print("🔄 Fetching replacement video excluding: \(currentVideoId)")
         
         // Check auth state
@@ -413,7 +416,7 @@ class FirestoreService {
           }
     }
     
-    func fetchRandomVideo() async throws -> Video {
+    func fetchRandomVideo() async throws -> LikeTheseVideo {
         print("🎲 Fetching random video")
         
         return try await executeWithRetry { [weak self] in
@@ -438,7 +441,7 @@ class FirestoreService {
             // create a replica instead of fetching a new one
             if snapshot.documents.count < 4 {
                 print("⚠️ Low on videos, creating replica")
-                return Video(
+                return LikeTheseVideo(
                     id: "\(video.id)_replica_\(UUID().uuidString)",
                     url: video.url,
                     thumbnailUrl: video.thumbnailUrl,
@@ -448,5 +451,78 @@ class FirestoreService {
             
             return video
         }
+    }
+    
+    func fetchVideos() async throws -> [LikeTheseVideo] {
+        let snapshot = try await db.collection("videos").getDocuments()
+        return try await withThrowingTaskGroup(of: LikeTheseVideo.self) { group in
+            var videos: [LikeTheseVideo] = []
+            for document in snapshot.documents {
+                group.addTask {
+                    try await self.validateVideoData(document.data(), documentId: document.documentID)
+                }
+            }
+            for try await video in group {
+                videos.append(video)
+            }
+            return videos
+        }
+    }
+    
+    func getVideo(id: String) async throws -> LikeTheseVideo {
+        let document = try await db.collection("videos").document(id).getDocument()
+        guard document.exists else {
+            throw FirestoreError.documentNotFound(id)
+        }
+        return try await validateVideoData(document.data() ?? [:], documentId: document.documentID)
+    }
+    
+    func addVideo(_ video: LikeTheseVideo) async throws {
+        try await db.collection("videos").document(video.id).setData([
+            "url": video.url,
+            "thumbnailUrl": video.thumbnailUrl,
+            "frameUrl": video.frameUrl as Any,
+            "timestamp": video.timestamp
+        ])
+    }
+    
+    func updateVideo(_ video: LikeTheseVideo) async throws {
+        try await db.collection("videos").document(video.id).updateData([
+            "url": video.url,
+            "thumbnailUrl": video.thumbnailUrl,
+            "frameUrl": video.frameUrl as Any,
+            "timestamp": video.timestamp
+        ])
+    }
+    
+    func deleteVideo(_ video: LikeTheseVideo) async throws {
+        try await db.collection("videos").document(video.id).delete()
+    }
+    
+    func findLeastSimilarVideo(excluding videoIds: [String]) async throws -> LikeTheseVideo {
+        print("🔄 Finding least similar video excluding \(videoIds.count) videos")
+        
+        // Get all videos except excluded ones
+        let snapshot = try await db.collection("videos")
+            .whereField("id", notIn: videoIds)
+            .getDocuments()
+        
+        guard !snapshot.documents.isEmpty else {
+            throw FirestoreError.emptyVideoCollection
+        }
+        
+        // Get a random video from the remaining ones
+        let randomDoc = snapshot.documents.randomElement()!
+        let data = randomDoc.data()
+        
+        return try await validateVideoData(data, documentId: randomDoc.documentID)
+    }
+    
+    func getNextSortedVideo(currentBoardVideos: [LikeTheseVideo]) async throws -> LikeTheseVideo {
+        print("🔄 Getting next sorted video")
+        
+        // For now, just get a random video that's not in the current board
+        let excludedIds = currentBoardVideos.map { $0.id }
+        return try await findLeastSimilarVideo(excluding: excludedIds)
     }
 } 

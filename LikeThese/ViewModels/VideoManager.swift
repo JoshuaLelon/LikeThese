@@ -5,14 +5,6 @@ import FirebaseStorage
 import FirebaseFirestore
 import FirebaseFunctions
 
-// Video model
-struct Video: Identifiable, Codable {
-    let id: String
-    let url: String
-    let thumbnailUrl: String
-    var frameUrl: String?
-}
-
 // Video errors
 enum VideoError: Error {
     case invalidResponse
@@ -123,7 +115,7 @@ class VideoManager: NSObject, ObservableObject {
     private let storage = Storage.storage()
     
     // Video data
-    @Published private(set) var videos: [Video] = []
+    @Published private(set) var videos: [LikeTheseVideo] = []
     @Published private(set) var sortedCandidates: [(videoId: String, distance: Double)] = []
     @Published private(set) var nextVideoIndex: Int = 0
     
@@ -992,7 +984,7 @@ class VideoManager: NSObject, ObservableObject {
     }
     
     // Update findLeastSimilarVideo to store sorted queue
-    func findLeastSimilarVideo(for boardVideos: [Video], excluding: [String] = []) async throws -> Video {
+    func findLeastSimilarVideo(for boardVideos: [LikeTheseVideo], excluding: [String] = []) async throws -> LikeTheseVideo {
         let candidateVideos = videos.filter { video in
             !boardVideos.contains { $0.id == video.id } && 
             !excluding.contains(video.id)
@@ -1037,7 +1029,7 @@ class VideoManager: NSObject, ObservableObject {
     }
     
     // Add function to get next video from sorted queue
-    func getNextSortedVideo(currentBoardVideos: [Video]) async throws -> Video {
+    func getNextSortedVideo(currentBoardVideos: [LikeTheseVideo]) async throws -> LikeTheseVideo {
         // If we've reached the end or have no sorted candidates, get a fresh list
         if nextVideoIndex >= sortedCandidates.count || sortedCandidates.isEmpty {
             let video = try await findLeastSimilarVideo(for: currentBoardVideos)

@@ -24,6 +24,8 @@ struct VideoPlaybackView: View {
     @State private var transitionOpacity: Double = 1
     @State private var incomingOffset: CGFloat = 0
     @State private var isFullscreen = false
+    @State private var isNavigatingToVideo = false
+    @State private var currentVideos: [LikeTheseVideo]
     
     private enum TransitionState {
         case none
@@ -32,15 +34,14 @@ struct VideoPlaybackView: View {
     
     let initialVideo: LikeTheseVideo
     let initialIndex: Int
-    let videos: [LikeTheseVideo]
     
     init(initialVideo: LikeTheseVideo, initialIndex: Int, videos: [LikeTheseVideo], videoManager: VideoManager, viewModel: VideoViewModel) {
         self.initialVideo = initialVideo
         self.initialIndex = initialIndex
-        self.videos = videos
+        self._currentVideos = State(initialValue: videos)
         self.videoManager = videoManager
         self.viewModel = viewModel
-        print("📱 VideoPlaybackView initialized with video: \(initialVideo.id) at index: \(initialIndex), total videos: \(videos.count)")
+        print("📱 Init: video \(initialVideo.id) at \(initialIndex)/\(videos.count)")
     }
     
     var body: some View {
@@ -50,7 +51,7 @@ struct VideoPlaybackView: View {
                 
                 // Current video stays fixed in place
                 if let currentIndex = currentIndex,
-                   let video = videos[safe: currentIndex],
+                   let video = currentVideos[safe: currentIndex],
                    let url = URL(string: video.url) {
                     VideoPlayer(player: videoManager.player(for: currentIndex))
                         .frame(width: geometry.size.width, height: geometry.size.height)
@@ -75,7 +76,7 @@ struct VideoPlaybackView: View {
                 
                 // Only the incoming video moves in or out
                 if case .transitioning(_, let toIndex) = transitionState,
-                   let video = videos[safe: toIndex],
+                   let video = currentVideos[safe: toIndex],
                    let url = URL(string: video.url) {
                     VideoPlayer(player: videoManager.player(for: toIndex))
                         .frame(width: geometry.size.width, height: geometry.size.height)
@@ -111,7 +112,7 @@ struct VideoPlaybackView: View {
         }
         .task {
             // Initialize state and preload immediately
-            viewModel.videos = videos
+            viewModel.videos = currentVideos
             currentIndex = initialIndex
             print("📊 INITIAL STATE: Setting up \(viewModel.videos.count) videos, current index: \(initialIndex)")
             
@@ -136,8 +137,8 @@ struct VideoPlaybackView: View {
                     }
                     
                     // Preload the next video if available
-                    if initialIndex + 1 < videos.count,
-                       let nextVideoUrl = URL(string: videos[initialIndex + 1].url) {
+                    if initialIndex + 1 < currentVideos.count,
+                       let nextVideoUrl = URL(string: currentVideos[initialIndex + 1].url) {
                         try await videoManager.preloadVideo(url: nextVideoUrl, forIndex: initialIndex + 1)
                         print("🔄 Preloaded next video at index: \(initialIndex + 1)")
                     }
@@ -198,6 +199,7 @@ struct VideoPlaybackView: View {
                     // Swipe right - return to grid
                     withAnimation(.easeInOut(duration: 0.3)) {
                         horizontalOffset = geometry.size.width
+                        isFullscreen = false  // Exit fullscreen when returning to grid
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         dismiss()
@@ -232,54 +234,45 @@ struct VideoPlaybackView: View {
         
         Task {
             do {
-                // Begin gesture transition with immediate effect
                 videoManager.beginTransition(.gesture(from: current, to: current - 1)) {
                     Task { @MainActor in
-                        // Set initial state for animation
                         transitionState = .transitioning(from: current, to: current - 1)
-                        transitionOpacity = 0  // Start with new video invisible
-                        incomingOffset = -UIScreen.main.bounds.height  // Position above
+                        transitionOpacity = 0
+                        incomingOffset = -UIScreen.main.bounds.height
                     }
                 }
                 
-                // Try to get previous video from sequence
                 if let previousVideo = viewModel.getPreviousVideo(from: current),
                    let url = URL(string: previousVideo.url) {
-                    // Ensure previous video is preloaded and ready
                     try await videoManager.preloadVideo(url: url, forIndex: current - 1)
                     
-                    // Prepare next video but don't start playing yet
                     if let player = videoManager.player(for: current - 1) {
                         await player.seek(to: .zero)
                     }
                     
-                    // Animate old video down while bringing new video in
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        offset = UIScreen.main.bounds.height  // Move current video down
-                        incomingOffset = 0  // Bring new video to center
-                        transitionOpacity = 1  // Fade in new video
+                        offset = UIScreen.main.bounds.height
+                        incomingOffset = 0
+                        transitionOpacity = 1
                     }
                     
-                    // Wait for animation to complete
                     try await Task.sleep(nanoseconds: 300_000_000)
                     
-                    // Start playing new video only after animation
                     if let player = videoManager.player(for: current - 1) {
                         player.playImmediately(atRate: 1.0)
                         videoManager.startPlaying(at: current - 1)
                     }
                     
-                    // Capture videoManager before MainActor.run
                     let manager = videoManager
                     await MainActor.run {
                         currentIndex = current - 1
                         transitionState = .none
-                        offset = 0  // Reset offset for next interaction
+                        offset = 0
                         manager.finishTransition(at: current - 1)
                     }
                 }
             } catch {
-                print("❌ Failed to handle swipe down: \(error.localizedDescription)")
+                print("❌ Swipe down failed: \(error.localizedDescription)")
                 errorMessage = error.localizedDescription
                 showError = true
                 videoManager.cleanup(context: .error)
@@ -290,73 +283,109 @@ struct VideoPlaybackView: View {
     private func handleSwipeUp() {
         guard let current = currentIndex else { return }
         
+        print("👆 SWIPE: Starting swipe up from index \(current)")
+        print("🎥 MODE: Currently in \(isFullscreen ? "fullscreen" : "grid") mode")
+        
         Task {
             do {
-                // Begin gesture transition with immediate effect
-                videoManager.beginTransition(.gesture(from: current, to: current + 1)) {
-                    Task { @MainActor in
-                        // Set initial state for animation
-                        transitionState = .transitioning(from: current, to: current + 1)
-                        transitionOpacity = 0  // Start with new video invisible
-                        incomingOffset = UIScreen.main.bounds.height  // Position below
-                    }
+                await MainActor.run {
+                    transitionState = .transitioning(from: current, to: current + 1)
+                    transitionOpacity = 0
+                    incomingOffset = UIScreen.main.bounds.height
                 }
                 
-                // Try to get next video from sorted queue if in fullscreen
-                let nextVideo: LikeTheseVideo?
+                var nextVideo: LikeTheseVideo?
                 if isFullscreen {
+                    print("🎥 FULLSCREEN: Handling swipe in fullscreen mode")
                     do {
-                        nextVideo = try await viewModel.getNextSortedVideo()
-                    } catch {
-                        print("❌ End of sorted queue reached: \(error.localizedDescription)")
-                        // Return to grid view when we reach the end of the queue
-                        await MainActor.run {
-                            withAnimation(.easeInOut(duration: 0.3)) {
-                                isFullscreen = false
-                            }
-                            dismiss()
+                        // Load the current video and board videos into the ViewModel if not already loaded
+                        if viewModel.currentVideo == nil {
+                            print("🔄 FULLSCREEN: Loading initial video state")
+                            viewModel.loadVideo(currentVideos[current], boardVideos: currentVideos)
+                            print("📊 FULLSCREEN: Loaded video \(currentVideos[current].id) with \(currentVideos.count) board videos")
                         }
-                        nextVideo = nil
+                        
+                        print("🎬 FULLSCREEN: Fetching next video from sorted queue")
+                        nextVideo = try await viewModel.getNextSortedVideo()
+                        print("✅ FULLSCREEN: Got next video: \(nextVideo?.id ?? "nil")")
+                    } catch {
+                        print("❌ QUEUE: Queue ended: \(error.localizedDescription)")
+                        // Instead of dismissing, try to get a fresh queue
+                        do {
+                            print("🔄 QUEUE: Queue ended, fetching fresh queue...")
+                            let currentBoardVideos = currentVideos
+                            print("📊 QUEUE: Creating new queue with \(currentBoardVideos.count) board videos")
+                            try await viewModel.createSortedQueue(from: currentVideos[current], boardVideos: currentBoardVideos)
+                            nextVideo = try await viewModel.getNextSortedVideo()
+                            print("✅ QUEUE: Successfully refreshed queue and got next video: \(nextVideo?.id ?? "nil")")
+                        } catch {
+                            print("❌ QUEUE: Failed to refresh queue: \(error.localizedDescription)")
+                            print("🔄 QUEUE: Current state before dismissal:")
+                            viewModel.debugQueueState()
+                            await MainActor.run {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    isFullscreen = false
+                                }
+                                dismiss()
+                            }
+                            return
+                        }
                     }
                 } else {
+                    print("📱 GRID: Getting next video in grid mode")
                     nextVideo = viewModel.getNextVideo(from: current)
+                    print("✅ GRID: Got next video: \(nextVideo?.id ?? "nil")")
+                    
+                    if nextVideo == nil {
+                        print("🔄 GRID: No next video, attempting to enter fullscreen mode")
+                        isFullscreen = true
+                        viewModel.loadVideo(currentVideos[current], boardVideos: currentVideos)
+                        print("📊 GRID: Loaded video \(currentVideos[current].id) with \(currentVideos.count) board videos")
+                        do {
+                            try await viewModel.createSortedQueue(from: currentVideos[current], boardVideos: currentVideos)
+                            nextVideo = try await viewModel.getNextSortedVideo()
+                            print("✅ GRID->FULLSCREEN: Successfully got next video: \(nextVideo?.id ?? "nil")")
+                        } catch {
+                            print("❌ GRID->FULLSCREEN: Failed to get next video: \(error.localizedDescription)")
+                        }
+                    }
                 }
                 
                 if let nextVideo = nextVideo,
                    let url = URL(string: nextVideo.url) {
-                    // Ensure next video is preloaded and ready
+                    print("🔄 SWIPE: Loading next video at index \(current + 1)")
                     try await videoManager.preloadVideo(url: url, forIndex: current + 1)
                     
-                    // Prepare next video but don't start playing yet
                     if let player = videoManager.player(for: current + 1) {
                         await player.seek(to: .zero)
                     }
                     
-                    // Update videos array if needed
                     await MainActor.run {
-                        if current + 1 >= viewModel.videos.count {
-                            viewModel.videos.append(nextVideo)
+                        if current + 1 >= currentVideos.count {
+                            print("📥 SWIPE: Appending new video to list")
+                            currentVideos.append(nextVideo)
+                        }
+                        
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            offset = -UIScreen.main.bounds.height
+                            incomingOffset = 0
+                            transitionOpacity = 1
                         }
                     }
                     
-                    // Animate old video up while bringing new video in
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        offset = -UIScreen.main.bounds.height  // Move current video up
-                        incomingOffset = 0  // Bring new video to center
-                        transitionOpacity = 1
-                    }
-                    
-                    // Update state after animation
                     try? await Task.sleep(nanoseconds: UInt64(0.3 * Double(NSEC_PER_SEC)))
                     await MainActor.run {
                         currentIndex = current + 1
                         transitionState = .none
                         offset = 0
                         videoManager.finishTransition(at: current + 1)
+                        print("✅ SWIPE: Successfully transitioned to video at index \(current + 1)")
                     }
+                } else {
+                    print("❌ SWIPE: No next video available")
                 }
             } catch {
-                print("❌ Failed to handle swipe up: \(error.localizedDescription)")
+                print("❌ Swipe up failed: \(error.localizedDescription)")
                 errorMessage = error.localizedDescription
                 showError = true
                 videoManager.cleanup(context: .error)
@@ -365,18 +394,84 @@ struct VideoPlaybackView: View {
     }
     
     func setupVideoCompletion() {
-        print("🔄 SYSTEM: Setting up video completion handler")
+        print("🔄 Setting up completion handler")
         videoManager.onVideoComplete = { [self] index in
-            print("🎬 VIDEO COMPLETION HANDLER: Auto-advance triggered for completed video at index \(index)")
-            print("📊 QUEUE POSITION: Video \(index + 1) of \(viewModel.videos.count) in queue")
+            print("🎬 Video \(index + 1)/\(viewModel.videos.count) completed")
             
-            // Only cancel auto-advance if there's an active drag gesture
             guard isGestureActive && dragState else {
-                print("✅ AUTO-ADVANCE: Proceeding with auto-advance for video \(index)")
+                print("✅ Auto-advancing to next video")
                 return
             }
             
-            print("⚠️ AUTO-ADVANCE CANCELLED: Active gesture detected during video completion at index \(index)")
+            print("⚠️ Auto-advance cancelled: gesture active")
+        }
+    }
+    
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            // Add the main operation
+            group.addTask {
+                try await operation()
+            }
+            
+            // Add a timeout task
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw NSError(domain: "VideoPlaybackView", code: -1, userInfo: [NSLocalizedDescriptionKey: "Operation timed out"])
+            }
+            
+            // Return the first completed result (either the operation or timeout)
+            let result = try await group.next()
+            
+            // Cancel any remaining tasks
+            group.cancelAll()
+            
+            return try result ?? {
+                throw NSError(domain: "VideoPlaybackView", code: -1, userInfo: [NSLocalizedDescriptionKey: "Operation failed"])
+            }()
+        }
+    }
+    
+    private func navigateToVideo(at index: Int) async {
+        guard let video = currentVideos[safe: index],
+              let url = URL(string: video.url) else {
+            errorMessage = "Invalid video URL"
+            showError = true
+            return
+        }
+        
+        do {
+            isNavigatingToVideo = true
+            isFullscreen = true  // Set fullscreen mode when navigating to video
+            
+            // Preserve state before navigation
+            viewModel.preserveCurrentState()
+            print("🔄 NAVIGATION: Preserved grid state before video playback")
+            
+            // Prepare for playback
+            videoManager.prepareForPlayback(at: index)
+            
+            // Preload with progress tracking
+            try await videoManager.preloadVideo(url: url, forIndex: index)
+            
+            // Wait for player to be ready with timeout
+            try await withTimeout(seconds: 5) {
+                while true {
+                    if let player = videoManager.player(for: index),
+                       player.currentItem?.status == .readyToPlay,
+                       player.currentItem?.isPlaybackLikelyToKeepUp == true {
+                        break
+                    }
+                    try await Task.sleep(nanoseconds: 100_000_000)  // 0.1 second
+                }
+            }
+            
+            print("🎥 NAVIGATION: Successfully navigated to video at index \(index)")
+        } catch {
+            print("❌ Navigation failed: \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
+            showError = true
+            isNavigatingToVideo = false
         }
     }
 }

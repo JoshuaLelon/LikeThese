@@ -118,21 +118,18 @@ class FirestoreService: ObservableObject {
     }
     
     private func validateVideoData(_ data: [String: Any], documentId: String) async throws -> LikeTheseVideo {
-        print("🔄 Validating video data for document: \(documentId)")
-        print("📄 Document data: \(data)")
+        print("🔄 Validating video: \(documentId)")
         
         // First try to use signed URLs if available
         if let signedVideoUrl = data["signedVideoUrl"] as? String,
            let signedThumbnailUrl = data["signedThumbnailUrl"] as? String {
-            print("✅ Using pre-signed URLs")
+            print("✅ Using pre-signed URLs (video length: \(signedVideoUrl.count))")
             let video = LikeTheseVideo(
                 id: documentId,
                 url: signedVideoUrl,
                 thumbnailUrl: signedThumbnailUrl,
                 timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
             )
-            print("📄 Video URL: \(signedVideoUrl)")
-            print("📄 Thumbnail URL: \(signedThumbnailUrl)")
             return video
         }
         
@@ -142,15 +139,13 @@ class FirestoreService: ObservableObject {
             let thumbnailPath = data["thumbnailPath"] as? String ?? videoPath
             let thumbnailURL = try await getSignedURL(for: thumbnailPath).absoluteString
             
+            print("✅ Generated signed URLs from paths")
             let video = LikeTheseVideo(
                 id: documentId,
                 url: videoURL,
                 thumbnailUrl: thumbnailURL,
                 timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
             )
-            print("✅ Generated new signed URLs from paths")
-            print("📄 Video URL: \(videoURL)")
-            print("📄 Thumbnail URL: \(thumbnailURL)")
             return video
         }
         
@@ -165,55 +160,52 @@ class FirestoreService: ObservableObject {
                     videoURL = try await getSignedURL(for: storagePath).absoluteString
                     print("✅ Generated signed URL from storage URL")
                 } else {
-                    print("❌ Invalid video URL format: \(url)")
+                    print("❌ Invalid URL format: \(url.prefix(30))...")
                     throw FirestoreError.invalidVideoURL(url)
                 }
             } else {
                 videoURL = url
-                print("✅ Using direct video URL")
+                print("✅ Using direct URL")
             }
         } else if let videoFilePath = data["videoFilePath"] as? String {
             videoURL = try await getSignedURL(for: videoFilePath).absoluteString
-            print("✅ Generated signed URL from storage path")
+            print("✅ Generated signed URL from path")
         } else {
-            print("❌ No video URL or storage path found in document: \(documentId)")
+            print("❌ No video URL found for: \(documentId)")
             throw FirestoreError.invalidVideoData
         }
         
         // Get thumbnail URL - either from direct URL or storage path
         let thumbnailURL: String
         if let url = data["thumbnailUrl"] as? String {
-            // Convert storage URL to storage path
             if url.contains("storage.googleapis.com") {
                 let components = url.components(separatedBy: "/thumbnails/")
                 if let filename = components.last {
                     let storagePath = "thumbnails/\(filename)"
                     thumbnailURL = try await getSignedURL(for: storagePath).absoluteString
-                    print("✅ Generated signed thumbnail URL from storage URL")
+                    print("✅ Generated thumbnail URL")
                 } else {
-                    print("⚠️ Invalid thumbnail URL format: \(url), using video URL")
+                    print("⚠️ Invalid thumbnail format, using video URL")
                     thumbnailURL = videoURL
                 }
             } else {
                 thumbnailURL = url
-                print("✅ Using direct thumbnail URL")
+                print("✅ Using direct thumbnail")
             }
         } else if let thumbnailPath = data["thumbnailFilePath"] as? String {
             do {
                 thumbnailURL = try await getSignedURL(for: thumbnailPath).absoluteString
-                print("✅ Generated signed thumbnail URL from storage path")
+                print("✅ Generated thumbnail from path")
             } catch {
-                print("⚠️ Failed to get thumbnail URL, using video URL: \(error.localizedDescription)")
+                print("⚠️ Thumbnail generation failed, using video URL")
                 thumbnailURL = videoURL
             }
         } else {
             thumbnailURL = videoURL
-            print("ℹ️ No thumbnail URL or path found, using video URL")
+            print("ℹ️ No thumbnail, using video URL")
         }
         
-        print("✅ Successfully validated video data for: \(documentId)")
-        print("📄 Video URL: \(videoURL)")
-        print("📄 Thumbnail URL: \(thumbnailURL)")
+        print("✅ Validated video: \(documentId)")
         
         let video = LikeTheseVideo(
             id: documentId,
@@ -263,7 +255,6 @@ class FirestoreService: ObservableObject {
                 .limit(to: limit)
             
             let snapshot = try await videosRef.getDocuments()
-            print("✅ Fetched \(snapshot.documents.count) initial videos")
             
             if snapshot.documents.isEmpty {
                 throw FirestoreError.emptyVideoCollection
@@ -271,17 +262,16 @@ class FirestoreService: ObservableObject {
             
             var videos: [LikeTheseVideo] = []
             for document in snapshot.documents {
-                let data = document.data()
-                print("🔄 Processing document: \(document.documentID)")
-                let video = try await validateVideoData(data, documentId: document.documentID)
+                let video = try await validateVideoData(document.data(), documentId: document.documentID)
                 videos.append(video)
             }
             
+            print("✅ Fetched \(videos.count)/\(limit) videos")
+            
             // If we don't have enough videos, replicate existing ones
             if videos.count < limit {
-                print("⚠️ Not enough videos, replicating existing ones")
+                print("⚠️ Replicating \(limit - videos.count) videos")
                 while videos.count < limit {
-                    // Take a random video from the existing ones and create a copy
                     if let originalVideo = videos.randomElement() {
                         let replicatedVideo = LikeTheseVideo(
                             id: "\(originalVideo.id)_replica_\(UUID().uuidString)",

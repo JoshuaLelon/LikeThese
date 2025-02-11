@@ -269,6 +269,11 @@ struct VideoPlaybackView: View {
                         transitionState = .none
                         offset = 0
                         manager.finishTransition(at: current - 1)
+                        
+                        // Start playing immediately after transition
+                        if let player = manager.player(for: current - 1) {
+                            player.playImmediately(atRate: 1.0)
+                        }
                     }
                 }
             } catch {
@@ -379,6 +384,12 @@ struct VideoPlaybackView: View {
                         transitionState = .none
                         offset = 0
                         videoManager.finishTransition(at: current + 1)
+                        
+                        // Start playing immediately after transition
+                        if let player = videoManager.player(for: current + 1) {
+                            player.playImmediately(atRate: 1.0)
+                        }
+                        
                         print("✅ SWIPE: Successfully transitioned to video at index \(current + 1)")
                     }
                 } else {

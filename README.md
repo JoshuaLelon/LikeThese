@@ -280,3 +280,52 @@ LikeThese/
         ├── api/            # Firebase Functions & API docs
         └── components/     # React components & docs
 ```
+
+## Video Similarity Function
+
+### Overview
+The `findLeastSimilarVideo` Firebase function computes video similarity using CLIP embeddings and returns a sorted list of candidates.
+
+### Response Format
+```typescript
+{
+  chosen: string;                // ID of the chosen video
+  sortedCandidates: Array<{     // All candidates sorted by similarity
+    videoId: string;
+    distance: number;
+  }>;
+  score: number;                // Similarity score
+  posterImageUrl?: string;      // Optional poster URL
+}
+```
+
+### Debugging
+To monitor the function's behavior, look for these log patterns:
+```
+📤 Calling findLeastSimilarVideo with [N] board videos and [M] candidates
+📥 Received response from findLeastSimilarVideo
+📊 Received [K] sorted candidates
+✅ Found chosen video: [VIDEO_ID]
+```
+
+### Common Issues & Solutions
+1. **Authentication Errors**
+   - Check that Firebase is properly configured
+   - Ensure user is authenticated before calling function
+   - Look for token-related logs: `🎫 Got fresh token`
+
+2. **Missing Videos**
+   - Verify video IDs exist in Firestore
+   - Check Storage URLs are valid and accessible
+   - Confirm thumbnails/frames are properly generated
+
+3. **Network Issues**
+   - Function includes 3 retry attempts
+   - Check Firebase emulator is running (if local)
+   - Verify network connectivity and Firebase configuration
+
+### Performance Optimization
+- CLIP embeddings are cached for faster computation
+- URLs are signed with appropriate expiration
+- Response times typically under 2 seconds
+- Batch operations used where possible

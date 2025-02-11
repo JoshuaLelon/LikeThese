@@ -159,4 +159,66 @@
 159| 4. [ ] **Possible Enhancements**: Add a multi-swipe feature that toggles between your newly sorted queue and a random selection for wildcard variety.  
 160|
 161| ---
-162| **End of Phase 12**  
+162|
+163| ### 10. Function Response Format & Behavior
+1. **Response Structure**
+   ```typescript
+   interface Response {
+     chosen: string;                // ID of the chosen video
+     sortedCandidates: Array<{     // All candidates sorted by similarity
+       videoId: string;
+       distance: number;
+     }>;
+     score: number;                // Similarity score
+     posterImageUrl?: string;      // Optional poster URL
+   }
+   ```
+
+2. **Embedding Format**
+   - CLIP embeddings are 27-dimensional vectors
+   - Values typically range from -0.05 to 0.05
+   - Example embedding:
+     ```javascript
+     [
+       -0.0437239371240139,
+       -0.003614606335759163,
+       0.009466157294809818,
+       // ... (27 total values)
+     ]
+     ```
+
+3. **URL Handling**
+   - Function returns signed URLs for both videos and thumbnails
+   - URLs include:
+     - GoogleAccessId
+     - Expiration timestamp
+     - Cryptographic signature
+   - Example URL format:
+     ```
+     https://storage.googleapis.com/[PROJECT_ID].firebasestorage.app/[PATH]?GoogleAccessId=[ID]&Expires=[TIMESTAMP]&Signature=[SIG]
+     ```
+
+4. **Success Indicators**
+   - Logs show step-by-step progress:
+     ```
+     📤 Calling findLeastSimilarVideo with [N] board videos and [M] candidates
+     📥 Received response from findLeastSimilarVideo
+     📊 Received [K] sorted candidates
+     ✅ Found chosen video: [VIDEO_ID]
+     ```
+
+5. **Error Handling**
+   - Function includes retry logic (3 attempts)
+   - Handles authentication errors gracefully
+   - Returns clear error messages for:
+     - Invalid responses
+     - Missing videos
+     - Network errors
+
+6. **Performance Notes**
+   - Response times typically under 2 seconds
+   - Embedding computation is cached
+   - URL signing adds minimal overhead
+
+---
+**End of Phase 12**  

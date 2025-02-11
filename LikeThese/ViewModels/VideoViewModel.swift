@@ -223,19 +223,23 @@ class VideoViewModel: ObservableObject {
                 )
                 
                 // Update videos array
-                var updatedVideos = videos
-                updatedVideos.remove(at: index)
-                updatedVideos.insert(newVideo, at: index)
-                
-                // Update sequence
-                videoSequence[index] = newVideo
-                
-                videos = updatedVideos
-                replacingVideoId = nil
+                await MainActor.run {
+                    var updatedVideos = videos
+                    updatedVideos.remove(at: index)
+                    updatedVideos.insert(newVideo, at: index)
+                    
+                    // Update sequence
+                    videoSequence[index] = newVideo
+                    
+                    videos = updatedVideos
+                    replacingVideoId = nil
+                }
                 
             } catch {
-                self.error = error
-                replacingVideoId = nil
+                await MainActor.run {
+                    self.error = error
+                    replacingVideoId = nil
+                }
             }
         }
     }

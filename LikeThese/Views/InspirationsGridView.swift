@@ -159,6 +159,20 @@ struct InspirationsGridView: View {
                     }
                     .padding(gridPadding)
                     
+                    // Add refresh button in center
+                    Button(action: {
+                        Task {
+                            await viewModel.loadInitialVideos()
+                        }
+                    }) {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                            .font(.system(size: 44))
+                            .foregroundColor(.white.opacity(0.8))
+                            .background(Circle().fill(Color.black.opacity(0.5)))
+                            .shadow(radius: 10)
+                    }
+                    .position(x: geometry.size.width / 2, y: videoHeight + gridSpacing / 2)
+                    
                     // Touch Target Areas
                     if gridVideos.count >= 4 {
                         // Vertical gap between left videos

@@ -5,13 +5,12 @@ const Replicate = require("replicate");
 const axios = require("axios");
 const { Client, RunTree } = require("langsmith");
 const config = require("./config");
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
-ffmpeg.setFfmpegPath(ffmpegPath);
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // Define secrets
 const replicateApiKey = defineSecret('REPLICATE_API_KEY_SECRET');
 const langsmithApiKey = defineSecret('LANGSMITH_API_KEY_SECRET');
+const geminiApiKey = defineSecret('GEMINI_API_KEY_SECRET');
 
 // Set environment variables for LangSmith
 process.env.LANGSMITH_TRACING_V2 = "true";
@@ -122,6 +121,26 @@ async function initializeLangSmith() {
     }
   }
   return langsmithClient;
+}
+
+// Add Gemini initialization
+let geminiClient = null;
+
+async function initializeGemini() {
+    if (!geminiClient) {
+        try {
+            const apiKey = geminiApiKey.value();
+            if (!apiKey) {
+                throw new Error("GEMINI_API_KEY_SECRET not found");
+            }
+            geminiClient = new GoogleGenerativeAI(apiKey);
+            return geminiClient;
+        } catch (error) {
+            console.error("Failed to initialize Gemini:", error);
+            throw error;
+        }
+    }
+    return geminiClient;
 }
 
 // Batch fetch embeddings from Firestore
@@ -570,6 +589,11 @@ async function extractSingleFrame(videoUrl, outputPath) {
   console.log(`🎬 Extracting first frame from ${videoUrl}`);
   
   try {
+    // Initialize ffmpeg here
+    const ffmpeg = require('fluent-ffmpeg');
+    const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
+    ffmpeg.setFfmpegPath(ffmpegPath);
+
     // Download video to temp file
     const response = await axios({
       method: 'GET',

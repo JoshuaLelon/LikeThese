@@ -32,13 +32,13 @@ admin.initializeApp();
 // Define error messages
 const ERROR_MESSAGES = {
   FRAME_EXTRACTION: "Failed to extract video frame",
-  EMBEDDING: "Failed to compute video similarity",
-  POSTER: "Failed to generate poster image",
+  EMBEDDING: "Failed to compute text embedding",
+  CAPTION: "Failed to generate caption",
   GENERAL: "Failed to process video request"
 };
 
-// Cache for CLIP embeddings
-const clipEmbeddingCache = new Map();
+// Cache for text embeddings
+const textEmbeddingCache = new Map();
 
 // Initialize LangSmith client
 let langsmithClient = null;
@@ -76,10 +76,10 @@ async function batchFetchEmbeddings(videoIds) {
         
         snapshot.forEach(doc => {
             const data = doc.data();
-            if (data.clipEmbedding) {
-                results.set(data.id, data.clipEmbedding);
+            if (data.textEmbedding) {
+                results.set(data.id, data.textEmbedding);
                 // Update cache
-                clipEmbeddingCache.set(data.id, data.clipEmbedding);
+                textEmbeddingCache.set(data.id, data.textEmbedding);
             }
         });
     }
@@ -95,7 +95,7 @@ async function getEmbeddingsWithCache(videos) {
     
     // Check cache first
     for (const video of videos) {
-        const cached = clipEmbeddingCache.get(video.id);
+        const cached = textEmbeddingCache.get(video.id);
         if (cached) {
             results.push({ videoId: video.id, embedding: cached, source: 'cache' });
         } else {
@@ -118,7 +118,7 @@ async function getEmbeddingsWithCache(videos) {
                 if (!replicateInstance) {
                     replicateInstance = await initializeReplicate();
                 }
-                // Compute new embedding using frameUrl instead of thumbnailUrl
+                // Get caption using frameUrl instead of thumbnailUrl
                 const frameUrl = video.frameUrl;
                 if (!frameUrl) {
                     console.warn(`⚠️ No frameUrl found for video ${video.id}, extracting frame...`);
@@ -126,13 +126,35 @@ async function getEmbeddingsWithCache(videos) {
                         videoUrl: video.url,
                         videoId: video.id
                     });
-                    const newEmbedding = await getClipEmbedding(newFrameUrl, replicateInstance);
-                    clipEmbeddingCache.set(video.id, newEmbedding);
+                    const caption = await generateCaption(newFrameUrl, replicateInstance);
+                    const newEmbedding = await generateTextEmbedding(caption);
+                    textEmbeddingCache.set(video.id, newEmbedding);
                     results.push({ videoId: video.id, embedding: newEmbedding, source: 'computed_new' });
+                    
+                    // Update Firestore with new caption and embedding
+                    await admin.firestore()
+                        .collection('videos')
+                        .doc(video.id)
+                        .update({
+                            caption,
+                            textEmbedding: newEmbedding,
+                            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                        });
                 } else {
-                    const newEmbedding = await getClipEmbedding(frameUrl, replicateInstance);
-                    clipEmbeddingCache.set(video.id, newEmbedding);
+                    const caption = await generateCaption(frameUrl, replicateInstance);
+                    const newEmbedding = await generateTextEmbedding(caption);
+                    textEmbeddingCache.set(video.id, newEmbedding);
                     results.push({ videoId: video.id, embedding: newEmbedding, source: 'computed' });
+                    
+                    // Update Firestore with new caption and embedding
+                    await admin.firestore()
+                        .collection('videos')
+                        .doc(video.id)
+                        .update({
+                            caption,
+                            textEmbedding: newEmbedding,
+                            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                        });
                 }
             }
         }
@@ -235,101 +257,77 @@ function validateInputUrls(boardVideos, candidateVideos) {
   }
 }
 
-// Get CLIP embeddings using Replicate
-async function getClipEmbedding(imageUrl, replicateInstance = null) {
-  if (!isValidFirebaseStorageUrl(imageUrl)) {
-    throw new functions.https.HttpsError(
-      'invalid-argument',
-      `Invalid Firebase Storage URL: ${imageUrl}`
-    );
-  }
-  
-  let lastError;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      // Get a fresh Replicate instance only if not provided
-      if (!replicateInstance) {
-        replicateInstance = await initializeReplicate();
-      }
-      
-      console.log(`🔄 Getting CLIP embedding for ${imageUrl} (attempt ${attempt + 1})`);
-      const output = await replicateInstance.run(
-        "zsxkib/jina-clip-v2:5050c3108bab23981802011a3c76ee327cc0dbfdd31a2f4ef1ee8ef0d3f0b448",
-        {
-          input: {
-            image: imageUrl,
-            embedding_dim: 512,
-            output_format: "array"
-          }
+// Generate caption using BLIP
+async function generateCaption(imageUrl, replicateInstance = null) {
+    if (!isValidFirebaseStorageUrl(imageUrl)) {
+        throw new functions.https.HttpsError(
+            'invalid-argument',
+            `Invalid Firebase Storage URL: ${imageUrl}`
+        );
+    }
+    
+    let lastError;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            // Get a fresh Replicate instance only if not provided
+            if (!replicateInstance) {
+                replicateInstance = await initializeReplicate();
+            }
+            
+            console.log(`🔄 Generating caption for ${imageUrl} (attempt ${attempt + 1})`);
+            const output = await replicateInstance.run(
+                "salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746",
+                {
+                    input: {
+                        task: "image_captioning",
+                        image: imageUrl
+                    }
+                }
+            );
+            console.log("✅ Successfully generated caption");
+            return output[0].text.replace("Caption: ", "");
+        } catch (error) {
+            lastError = error;
+            console.error(`❌ Caption generation error (attempt ${attempt + 1}):`, {
+                name: error.name,
+                message: error.message,
+                response: error.response?.data || 'No response data',
+                stack: error.stack
+            });
+            
+            if (attempt === 0) {
+                console.warn(`Retrying caption generation for ${imageUrl} after error`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                // Reset the Replicate instance on retry
+                replicateInstance = null;
+            }
         }
-      );
-      console.log("✅ Successfully got CLIP embedding");
-      return output[0];
-    } catch (error) {
-      lastError = error;
-      console.error(`❌ CLIP embedding error (attempt ${attempt + 1}):`, {
-        name: error.name,
-        message: error.message,
-        response: error.response?.data || 'No response data',
-        stack: error.stack
-      });
-      
-      if (attempt === 0) {
-        console.warn(`Retrying CLIP embedding for ${imageUrl} after error`);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        // Reset the Replicate instance on retry
-        replicateInstance = null;
-      }
     }
-  }
-  throw new functions.https.HttpsError('internal', ERROR_MESSAGES.EMBEDDING, lastError);
+    throw new functions.https.HttpsError('internal', ERROR_MESSAGES.CAPTION, lastError);
 }
 
-// Generate poster image using Imagen
-async function generatePosterImage(prompt) {
-  let lastError;
-  for (let attempt = 0; attempt < 2; attempt++) {
+// Generate text embedding using OpenAI
+async function generateTextEmbedding(text) {
     try {
-      // Get a fresh Replicate instance for each attempt
-      const replicateInstance = await initializeReplicate();
-      
-      const out = await replicateInstance.run("google/imagen-3-fast", {
-        input: {
-          prompt,
-          width: 1080,
-          height: 1920
-        }
-      });
-      return out[0] || null;
+        const response = await axios.post(
+            'https://api.openai.com/v1/embeddings',
+            {
+                input: text,
+                model: "text-embedding-ada-002"
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+        
+        return response.data.data[0].embedding;
     } catch (error) {
-      lastError = error;
-      if (attempt === 0) {
-        console.warn(`Retrying poster generation for prompt "${prompt}" after error:`, error);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
-      }
+        console.error('❌ Failed to generate text embedding:', error);
+        throw new functions.https.HttpsError('internal', ERROR_MESSAGES.EMBEDDING, error);
     }
-  }
-  throw new functions.https.HttpsError('internal', ERROR_MESSAGES.POSTER, lastError);
-}
-
-// Compute cosine distance between two vectors
-function cosineDistance(vecA, vecB) {
-  const dot = vecA.reduce((sum, val, i) => sum + val * vecB[i], 0);
-  const normA = Math.sqrt(vecA.reduce((sum, val) => sum + val * val, 0));
-  const normB = Math.sqrt(vecB.reduce((sum, val) => sum + val * val, 0));
-  return 1 - (dot / (normA * normB));
-}
-
-// Compute average embedding from an array of embeddings
-function computeAverageEmbedding(embeddingsArray) {
-  const length = embeddingsArray[0].length;
-  const sum = Array(length).fill(0);
-  for (const emb of embeddingsArray) {
-    for (let i = 0; i < length; i++) {
-      sum[i] += emb[i];
-    }
-  }
-  return sum.map(val => val / embeddingsArray.length);
 }
 
 // Main function to handle video replacement

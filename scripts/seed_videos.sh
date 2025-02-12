@@ -116,16 +116,58 @@ else
     print_section "Uploading to Firebase Storage"
     echo -e "${GREEN}Starting upload to Firebase...${NC}"
 
-    # Function to compute CLIP embedding
-    compute_clip_embedding() {
+    # Function to compute text embedding and update Firestore
+    compute_text_embedding() {
         local video_name=$1
-        local force_update=$2
-        echo "🔄 Computing CLIP embedding for $video_name..."
-        if [ "$force_update" = true ]; then
-            node update_firestore.js update "$video_name"
-        else
-            node update_firestore.js create "$video_name"
+        local force=$2
+
+        # Check if document exists and has embedding
+        if [ "$force" != "true" ]; then
+            echo "🔍 Checking if document already has text embedding..."
+            if firebase firestore:get "videos/$video_name" | grep -q "textEmbedding"; then
+                echo "✅ Document already has text embedding"
+                return 0
+            fi
         fi
+
+        # Get signed URL for frame/thumbnail
+        echo "🔄 Getting signed URL for frame..."
+        local frame_url=$(gsutil signurl -d 1h service-account.json "gs://likethese-fc23d.firebasestorage.app/frames/$video_name.jpg" | tail -n 1 | cut -f 4)
+        
+        # Generate caption using BLIP
+        echo "🔄 Generating caption using BLIP..."
+        local caption=$(curl -X POST \
+            -H "Authorization: Bearer $REPLICATE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"version\": \"2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746\",
+                \"input\": {
+                    \"task\": \"image_captioning\",
+                    \"image\": \"$frame_url\"
+                }
+            }" \
+            https://api.replicate.com/v1/predictions | jq -r '.output[0].text' | sed 's/^Caption: //')
+        
+        # Generate text embedding using OpenAI
+        echo "🔄 Generating text embedding using OpenAI..."
+        local embedding=$(curl -X POST \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"input\": \"$caption\",
+                \"model\": \"text-embedding-ada-002\"
+            }" \
+            https://api.openai.com/v1/embeddings | jq -r '.data[0].embedding')
+        
+        # Update Firestore document
+        echo "💾 Updating Firestore document with caption and embedding..."
+        firebase firestore:update "videos/$video_name" "{
+            caption: \"$caption\",
+            textEmbedding: $embedding,
+            updatedAt: $(date +%s)
+        }"
+        
+        echo "✅ Successfully updated document with caption and text embedding"
     }
 
     # Main processing loop
@@ -165,8 +207,8 @@ else
             echo "✅ Frame copied to thumbnails successfully"
         fi
 
-        # Compute CLIP embedding and update Firestore
-        compute_clip_embedding "$video_name" true
+        # Compute text embedding and update Firestore
+        compute_text_embedding "$video_name" true
     done
 
     # Process sample data if available
@@ -201,8 +243,8 @@ else
                 echo "✅ Thumbnail uploaded successfully"
             fi
 
-            # Compute CLIP embedding and update Firestore
-            compute_clip_embedding "$video_name" true
+            # Compute text embedding and update Firestore
+            compute_text_embedding "$video_name" true
         done
     fi
 fi

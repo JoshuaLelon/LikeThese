@@ -153,19 +153,19 @@
 153| ---
 159.1| 
 159.2| **Implementation Plan: Textual Approach**  
-159.8|    - [ ] Replace CLIP embeddings with text-based approach:
-159.9|      - [ ] Remove all CLIP-related code from `index.js`
-159.10|      - [ ] Update Firestore schema to replace `clipEmbedding` with `textEmbedding`
-159.12|      - [ ] Update all functions to use text embeddings for similarity matching
+159.8|    - [PROGRESS] Replace CLIP embeddings with text-based approach:
+159.9|      - [x] Remove all CLIP-related code from `index.js`
+159.10|      - [x] Update Firestore schema to replace `clipEmbedding` with `textEmbedding`
+159.12|      - [x] Update all functions to use text embeddings for similarity matching
 
-159.13|    - [ ] Modify seeding script (`seed_videos.sh`):
-159.14|      - [ ] Add Salesforce BLIP integration for image-to-text
-159.15|      - [ ] Add OpenAI text embedding generation
-159.16|      - [ ] Add timing/logging using LangSmith format
-159.17|      - [ ] Store both caption and embedding in Firestore
+159.13|    - [PROGRESS] Modify seeding script (`seed_videos.sh`):
+159.14|      - [x] Add Salesforce BLIP integration for image-to-text
+159.15|      - [x] Add OpenAI text embedding generation
+159.16|      - [x] Add timing/logging using LangSmith format
+159.17|      - [x] Store both caption and embedding in Firestore
 
-159.18|    - [ ] Technical specifications:
-159.19|      - Use Salesforce BLIP model: `salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746`
+159.18|    - [x] Technical specifications:
+159.19|      - Model: `salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746`
 159.20|      - Configuration:
 159.21|        ```javascript
 159.22|        {
@@ -187,9 +187,58 @@
 159.37|      - [ ] Return error response without fallback
 159.38|      - [ ] Update error messages in ERROR_MESSAGES object
 
-159.39|
+159.39|    - [PROGRESS] Update existing update_firestore.js:
+159.40|      - [x] Set up basic structure and imports
+159.41|        - Added OpenAI to existing Firebase Admin and Replicate setup
+159.42|        - Verified environment variables handling
+159.43|      
+159.44|      - [x] Add new core functions alongside existing ones:
+159.45|        - [x] `getImageCaption(imageUrl)` - Uses BLIP for image captioning
+159.46|        - [x] `getTextEmbedding(caption)` - Uses OpenAI for text embeddings
+159.47|        - [x] `migrateDocument(basename)` - Updates single document with new approach
+159.48|        - [x] `migrateAllDocuments()` - Processes all documents
+159.49|        
+159.50|      - [x] Update existing helper functions:
+159.51|        - [x] Kept existing `checkDocument(basename)`
+159.52|        - [x] Kept existing `getSignedUrl(filePath)`
+159.53|        - [x] Added `hasTextEmbedding(basename)`
+159.54|        - [x] Update `createDocument` to include text embeddings
+159.55|        - [x] Update `updateDocument` to handle migration
+159.56|        
+159.57|      - [x] Modify command handling:
+159.58|        - [x] Keep existing `check` command
+159.59|        - [x] Update `create` to include text embeddings
+159.60|        - [x] Update `update` to include migration
+159.61|        - [x] Add `migrate` command
+159.62|        - [x] Add `migrate-all` command
+159.63|        - [x] Keep existing `list` command
+
+#### Technical Specifications
+- [x] BLIP model configuration:
+  - Model: `salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746`
+  - Input/Output format as specified
+- [x] OpenAI embedding model:
+  - Using `text-embedding-ada-002`
+  - Maintaining embedding format compatibility
+
+#### Considerations
+- [x] Decide on batch size for migrate-all to prevent timeout (set to 5 with configurable override)
+- [x] Determine error handling strategy for failed migrations (implemented with try/catch and error logging)
+- [x] Plan for handling rate limits from OpenAI and BLIP (implemented 2-second delay between batches)
+- [x] Consider parallel processing for migration (implemented with Promise.all for batch processing)
+- [x] Decide on retry strategy for failed API calls (implemented with error propagation and logging)
+
+#### Warnings
+1. Migration will modify existing documents while preserving CLIP embeddings
+2. Process may be slow due to sequential API calls to both BLIP and OpenAI
+3. Cost implications for API usage (both BLIP and OpenAI)
+4. Need to ensure adequate error handling for failed API calls
+5. Should maintain old CLIP embeddings during transition period
+6. Migration process cannot be easily rolled back once started
+7. Rate limits may affect migration speed (2-second delay between batches implemented)
+
 159.40| ### Warnings:
-159.41| 1. This is a breaking change - old CLIP embeddings will be incompatible
+159.41| 1. Breaking change - old CLIP embeddings will be incompatible
 159.42| 2. Need to reprocess all existing videos with new embedding approach
 159.43| 3. May need to update any UI components that depend on similarity scores
 160|

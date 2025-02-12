@@ -255,9 +255,9 @@ async function initializeReplicate() {
 // Validate Firebase Storage URL
 function isValidFirebaseStorageUrl(url) {
   try {
-    console.log("🔍 Validating URL:", url);
+    // console.log("🔍 Validating URL:", url);
     const urlObj = new URL(url);
-    console.log("🏠 Hostname:", urlObj.hostname);
+    // console.log("🏠 Hostname:", urlObj.hostname);
     
     // Accept any Google Storage or Firebase Storage URL
     const isValidHost = urlObj.hostname.includes('firebasestorage.googleapis.com') || 
@@ -270,7 +270,7 @@ function isValidFirebaseStorageUrl(url) {
                        url.includes('/o/thumbnails/');
     
     const isValid = isValidHost && isValidPath;
-    console.log("✅ URL validation result:", isValid);
+    // console.log("✅ URL validation result:", isValid);
     return isValid;
   } catch (e) {
     console.error("❌ URL validation error:", e);
@@ -280,8 +280,8 @@ function isValidFirebaseStorageUrl(url) {
 
 // Validate input URLs
 function validateInputUrls(boardVideos, candidateVideos) {
-  console.log("🔍 Validating board videos:", boardVideos);
-  console.log("🔍 Validating candidate videos:", candidateVideos);
+  console.log("🔍 Validating this many board videos:", boardVideos.length);
+  console.log("🔍 Validating this many candidate videos:", candidateVideos.length);
   
   const invalidBoardUrls = boardVideos.filter(
     video => !isValidFirebaseStorageUrl(video.thumbnailUrl)

@@ -38,6 +38,7 @@ const openai = new OpenAI({
 // Command can be 'check', 'create', 'update', 'migrate', 'migrate-all', or 'list'
 const command = process.argv[2];
 const basename = process.argv[3];
+const force = process.argv.includes('--force');
 
 // Get image caption using BLIP
 async function getImageCaption(imageUrl) {
@@ -47,11 +48,27 @@ async function getImageCaption(imageUrl) {
         {
             input: {
                 task: "image_captioning",
-                image: imageUrl
+                image: imageUrl,
+                use_beam_search: true,
+                min_length: 20,
+                max_length: 75
             }
         }
     );
-    const caption = output[0].text;
+    
+    console.log('Raw BLIP output:', JSON.stringify(output));
+    
+    // BLIP returns the caption as a string
+    const caption = output
+        .replace(/^Caption:\s*/i, '') // Remove "Caption: " prefix
+        .replace(/\s+/g, ' ')         // Replace multiple spaces/newlines with single space
+        .trim();                      // Remove leading/trailing whitespace
+    
+    console.log('Cleaned caption:', JSON.stringify(caption));
+    
+    if (!caption || caption.length < 10) {
+        throw new Error(`Failed to get valid caption from BLIP: ${JSON.stringify(output)}`);
+    }
     console.log(`✅ Generated caption: ${caption}`);
     return caption;
 }
@@ -108,7 +125,7 @@ async function hasTextEmbedding(basename) {
 }
 
 // Migrate a single document to use text embeddings
-async function migrateDocument(basename) {
+async function migrateDocument(basename, force = false) {
     console.log(`\n🔄 Migrating document for: ${basename}`);
     
     // Check if document exists
@@ -121,7 +138,7 @@ async function migrateDocument(basename) {
     const data = doc.data();
     
     // Check if text embedding already exists
-    if (await hasTextEmbedding(basename)) {
+    if (!force && await hasTextEmbedding(basename)) {
         console.log(`✅ Text embedding already exists for ${basename}, skipping migration`);
         return;
     }
@@ -159,7 +176,7 @@ async function migrateDocument(basename) {
 }
 
 // Migrate all documents in batches
-async function migrateAllDocuments(batchSize = 5) {
+async function migrateAllDocuments(batchSize = 5, force = false) {
     console.log(`\n📋 Starting migration of all documents...`);
     const snapshot = await db.collection('videos').get();
     
@@ -177,7 +194,7 @@ async function migrateAllDocuments(batchSize = 5) {
         console.log(`\n🔄 Processing batch ${Math.floor(i/batchSize) + 1} of ${Math.ceil(documents.length/batchSize)}`);
         
         // Process batch in parallel
-        await Promise.all(batch.map(doc => migrateDocument(doc.id)))
+        await Promise.all(batch.map(doc => migrateDocument(doc.id, force)))
             .catch(error => {
                 console.error(`⚠️ Error processing batch:`, error);
                 throw error;
@@ -372,7 +389,7 @@ if (command === 'check') {
         console.error('⚠️ Please provide a video name to migrate');
         process.exit(1);
     }
-    migrateDocument(basename)
+    migrateDocument(basename, force)
         .then(() => process.exit(0))
         .catch(error => {
             console.error('⚠️ Error migrating document:', error);
@@ -380,7 +397,7 @@ if (command === 'check') {
         });
 } else if (command === 'migrate-all') {
     const batchSize = parseInt(process.argv[3]) || 5;
-    migrateAllDocuments(batchSize)
+    migrateAllDocuments(batchSize, force)
         .then(() => process.exit(0))
         .catch(error => {
             console.error('⚠️ Error migrating all documents:', error);

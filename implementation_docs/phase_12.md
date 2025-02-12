@@ -304,15 +304,13 @@
    - Embedding computation is cached
    - URL signing adds minimal overhead
 
----
-**End of Phase 12**  
 
 ### 11. Gemini-Based Video Understanding
 1. **Parallel Implementation Strategy**
    - [x] Keep existing seed script (`seed_videos.sh`) and its dependencies untouched
-   - [ ] Create parallel seed script (`seed_videos_gemini.sh`) based on 2. **New Document Schema**
-   - [ ] Create parallel functions for Gemini-based processing
-   - [ ] Store both approaches in Firestore for comparison
+   - [x] Create parallel seed script (`seed_videos_gemini.sh`) based on new document schema
+   - [x] Create parallel functions for Gemini-based processing
+   - [x] Store both approaches in Firestore for comparison
    
    **Rationale for Dual Approach:**
    - Current approach (BLIP+OpenAI) provides fast, reliable baseline
@@ -338,7 +336,7 @@
 
 3. **Implementation Steps**
    a. **Video Description Generation**
-   - [ ] Create `functions/gemini_processor.js`:
+   - [x] Create `functions/gemini_processor.js`:
      ```javascript
      async function generateVideoDescription(videoUrl) {
        const client = genai.Client(api_key="GEMINI_API_KEY");
@@ -366,7 +364,7 @@
      ```
 
    b. **Text Embedding Generation**
-   - [ ] Add embedding function with caching:
+   - [x] Add embedding function with caching:
      ```javascript
      async function generateGeminiEmbedding(text, videoId) {
        // Check cache first
@@ -392,7 +390,7 @@
      ```
 
    c. **Similarity Measurement with Fallback**
-   - [ ] Add to `functions/index.js`:
+   - [x] Add to `functions/index.js`:
      ```javascript
      async function findSimilarVideosGemini(boardVideos, candidates) {
        try {
@@ -473,6 +471,17 @@
      - Log errors to LangSmith
      - Alert on high error rates
 
+### Warnings:
+1. Gemini API is in early access and may have stability issues
+2. Dual processing will increase API costs significantly
+3. Storage requirements will double for embeddings
+4. Migration process needs careful handling to prevent data loss
+5. Performance impact of running parallel systems needs monitoring
+6. Rate limits may affect processing speed
+7. Backward compatibility must be maintained during transition
+8. Error handling complexity increases with dual systems
+9. API costs may be significant during testing phase
+10. System complexity increases with parallel implementations
 
 ---
 **End of Phase 12**  

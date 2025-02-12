@@ -37,6 +37,55 @@ const ERROR_MESSAGES = {
   GENERAL: "Failed to process video request"
 };
 
+// Helper function to compute average embedding
+function computeAverageEmbedding(embeddingsArray) {
+  if (!embeddingsArray || embeddingsArray.length === 0) {
+    throw new Error('No embeddings provided to compute average');
+  }
+  
+  const length = embeddingsArray[0].length;
+  const sum = Array(length).fill(0);
+  
+  for (const emb of embeddingsArray) {
+    if (emb.length !== length) {
+      throw new Error('All embeddings must have the same length');
+    }
+    for (let i = 0; i < length; i++) {
+      sum[i] += emb[i];
+    }
+  }
+  
+  return sum.map(val => val / embeddingsArray.length);
+}
+
+// Helper function to compute cosine distance
+function cosineDistance(a, b) {
+  if (!a || !b || a.length !== b.length) {
+    throw new Error('Invalid embeddings for cosine distance calculation');
+  }
+  
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  
+  normA = Math.sqrt(normA);
+  normB = Math.sqrt(normB);
+  
+  if (normA === 0 || normB === 0) {
+    throw new Error('Zero magnitude vector found');
+  }
+  
+  const similarity = dotProduct / (normA * normB);
+  // Convert similarity to distance (1 - similarity)
+  return 1 - similarity;
+}
+
 // Cache for text embeddings
 const textEmbeddingCache = new Map();
 

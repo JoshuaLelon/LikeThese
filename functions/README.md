@@ -2,6 +2,20 @@
 
 This directory contains the Firebase Functions implementation for the LikeThese app's AI-based video replacement feature.
 
+## Environment Setup
+
+1. Copy `.env.example` to `.env`:
+```bash
+cp .env.example .env
+```
+
+2. Fill in the required environment variables in `.env`:
+- `REPLICATE_API_KEY`: Your Replicate API key
+- `LANGSMITH_API_KEY`: Your LangSmith API key
+- `GEMINI_API_KEY`: Your Google Gemini API key
+- `PROJECT_ID`: Your Firebase project ID
+- `STORAGE_BUCKET`: Your Firebase storage bucket name
+
 ## Setup
 
 1. Install dependencies:
@@ -111,3 +125,12 @@ The functions implement:
   - Poster generation failures
 - Skip failed items when computing "least similar"
 - Uses Firebase Functions default timeouts 
+
+## Dependencies
+
+The project uses the following key dependencies:
+- Firebase Admin SDK and Functions v2
+- Google Gemini AI for text processing
+- Replicate for image captioning
+- LangSmith for tracing and monitoring
+- FFmpeg for video frame extraction 

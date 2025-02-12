@@ -1,6 +1,5 @@
 const { defineSecret } = require('firebase-functions/params');
 const functions = require("firebase-functions/v2");
-const functionsV1 = require("firebase-functions");
 const admin = require("firebase-admin");
 const Replicate = require("replicate");
 const axios = require("axios");
@@ -9,12 +8,10 @@ const config = require("./config");
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // Define secrets
 const replicateApiKey = defineSecret('REPLICATE_API_KEY_SECRET');
 const langsmithApiKey = defineSecret('LANGSMITH_API_KEY_SECRET');
-const geminiApiKey = defineSecret('GEMINI_API_KEY_SECRET');
 
 // Set environment variables for LangSmith
 process.env.LANGSMITH_TRACING_V2 = "true";
@@ -112,9 +109,6 @@ const textEmbeddingCache = new Map();
 // Initialize LangSmith client
 let langsmithClient = null;
 
-// Add Gemini initialization
-let geminiClient = null;
-
 async function initializeLangSmith() {
   if (!langsmithClient) {
     try {
@@ -130,26 +124,9 @@ async function initializeLangSmith() {
   return langsmithClient;
 }
 
-async function initializeGemini() {
-    if (!geminiClient) {
-        try {
-            const apiKey = geminiApiKey.value();
-            if (!apiKey) {
-                throw new Error("GEMINI_API_KEY_SECRET not found");
-            }
-            geminiClient = new GoogleGenerativeAI(apiKey);
-            return geminiClient;
-        } catch (error) {
-            console.error("Failed to initialize Gemini:", error);
-            throw error;
-        }
-    }
-    return geminiClient;
-}
-
 // Batch fetch embeddings from Firestore
-async function batchFetchEmbeddings(videoIds, useGemini = false) {
-    console.log(`\n🔍 Batch fetching embeddings for ${videoIds.length} videos (using ${useGemini ? 'Gemini' : 'BLIP+OpenAI'})`);
+async function batchFetchEmbeddings(videoIds) {
+    console.log(`\n🔍 Batch fetching embeddings for ${videoIds.length} videos`);
     const results = new Map();
     
     // Split into chunks of 10 (Firestore limit)
@@ -166,9 +143,9 @@ async function batchFetchEmbeddings(videoIds, useGemini = false) {
         snapshot.forEach(doc => {
             const data = doc.data();
             if (data.textEmbedding) {
-                results.set(useGemini ? `gemini_${data.id}` : data.id, data.textEmbedding);
+                results.set(data.id, data.textEmbedding);
                 // Update cache
-                textEmbeddingCache.set(useGemini ? `gemini_${data.id}` : data.id, data.textEmbedding);
+                textEmbeddingCache.set(data.id, data.textEmbedding);
             }
         });
     }
@@ -176,18 +153,17 @@ async function batchFetchEmbeddings(videoIds, useGemini = false) {
     return results;
 }
 
-// Get embeddings with caching (updated to support both approaches)
-async function getEmbeddingsWithCache(videos, useGemini = false) {
-    console.log(`\n🔍 Starting getEmbeddingsWithCache for ${videos.length} videos (using ${useGemini ? 'Gemini' : 'BLIP+OpenAI'})`);
+// Get embeddings with caching
+async function getEmbeddingsWithCache(videos) {
+    console.log("\n🔍 Starting getEmbeddingsWithCache for", videos.length, "videos");
     const results = [];
     const missingEmbeddings = [];
     let replicateInstance = null;
-    let geminiInstance = null;
     
     // Check cache first
     console.log("🔍 Checking cache for", videos.length, "videos");
     for (const video of videos) {
-        const cached = textEmbeddingCache.get(useGemini ? `gemini_${video.id}` : video.id);
+        const cached = textEmbeddingCache.get(video.id);
         if (cached) {
             console.log("✅ Cache hit for video", video.id);
             results.push({ videoId: video.id, embedding: cached, source: 'cache' });
@@ -202,62 +178,50 @@ async function getEmbeddingsWithCache(videos, useGemini = false) {
         // Batch fetch from Firestore
         const videoIds = missingEmbeddings.map(v => v.id);
         console.log("🔍 Attempting Firestore batch fetch for", videoIds.length, "videos");
-        const firestoreEmbeddings = await batchFetchEmbeddings(videoIds, useGemini);
+        const firestoreEmbeddings = await batchFetchEmbeddings(videoIds);
         
         // Process missing embeddings
         for (const video of missingEmbeddings) {
-            const embedding = firestoreEmbeddings.get(useGemini ? `gemini_${video.id}` : video.id);
+            const embedding = firestoreEmbeddings.get(video.id);
             if (embedding) {
                 console.log("✅ Found embedding in Firestore for video", video.id);
                 results.push({ videoId: video.id, embedding, source: 'firestore' });
             } else {
                 console.log("\n🔄 Need to generate new embedding for video", video.id);
+                // Initialize Replicate only when we need it
+                if (!replicateInstance) {
+                    console.log("🔄 Initializing Replicate for caption generation");
+                    replicateInstance = await initializeReplicate();
+                }
                 
-                if (useGemini) {
-                    // Initialize Gemini only when we need it
-                    if (!geminiInstance) {
-                        console.log("🔄 Initializing Gemini for video analysis");
-                        geminiInstance = await initializeGemini();
-                    }
+                const frameUrl = video.frameUrl;
+                if (!frameUrl) {
+                    console.log("⚠️ No frameUrl found for video", video.id, ", extracting frame...");
+                    const { frameUrl: newFrameUrl } = await exports.extractVideoFrame({
+                        videoUrl: video.url,
+                        videoId: video.id
+                    });
+                    const caption = await generateCaption(newFrameUrl, replicateInstance);
+                    const newEmbedding = await generateTextEmbedding(caption);
+                    textEmbeddingCache.set(video.id, newEmbedding);
+                    results.push({ videoId: video.id, embedding: newEmbedding, source: 'computed_new' });
                     
-                    try {
-                        const { description, embedding } = await processVideoWithGemini(video, geminiInstance);
-                        textEmbeddingCache.set(`gemini_${video.id}`, embedding);
-                        results.push({ videoId: video.id, embedding, source: 'gemini' });
-                        
-                        // Update Firestore with Gemini data
-                        await admin.firestore()
-                            .collection('videos')
-                            .doc(video.id)
-                            .update({
-                                geminiDescription: description,
-                                geminiEmbedding: embedding,
-                                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-                            });
-                    } catch (error) {
-                        console.error(`Failed to process video ${video.id} with Gemini:`, error);
-                        // Fallback to BLIP+OpenAI
-                        if (!replicateInstance) {
-                            console.log("🔄 Falling back to BLIP+OpenAI");
-                            replicateInstance = await initializeReplicate();
-                        }
-                        const caption = await generateCaption(video.frameUrl, replicateInstance);
-                        const newEmbedding = await generateTextEmbedding(caption);
-                        results.push({ videoId: video.id, embedding: newEmbedding, source: 'fallback' });
-                    }
+                    // Update Firestore with new caption and embedding
+                    await admin.firestore()
+                        .collection('videos')
+                        .doc(video.id)
+                        .update({
+                            caption,
+                            textEmbedding: newEmbedding,
+                            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                        });
                 } else {
-                    // Original BLIP+OpenAI approach
-                    if (!replicateInstance) {
-                        console.log("🔄 Initializing Replicate for caption generation");
-                        replicateInstance = await initializeReplicate();
-                    }
-                    
-                    const caption = await generateCaption(video.frameUrl, replicateInstance);
+                    const caption = await generateCaption(frameUrl, replicateInstance);
                     const newEmbedding = await generateTextEmbedding(caption);
                     textEmbeddingCache.set(video.id, newEmbedding);
                     results.push({ videoId: video.id, embedding: newEmbedding, source: 'computed' });
                     
-                    // Update Firestore
+                    // Update Firestore with new caption and embedding
                     await admin.firestore()
                         .collection('videos')
                         .doc(video.id)
@@ -724,7 +688,7 @@ exports.extractVideoFrame = functions.https.onCall({
   }
 });
 
-// Add health check endpoint using v1 functions
-exports.healthCheck = functionsV1.https.onRequest((req, res) => {
-  res.status(200).send('OK');
+// Change healthCheck to v2
+exports.healthCheck = functions.https.onRequest((req, res) => {
+    res.status(200).send('OK');
 }); 

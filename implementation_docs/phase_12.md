@@ -306,3 +306,173 @@
 
 ---
 **End of Phase 12**  
+
+### 11. Gemini-Based Video Understanding
+1. **Parallel Implementation Strategy**
+   - [x] Keep existing seed script (`seed_videos.sh`) and its dependencies untouched
+   - [ ] Create parallel seed script (`seed_videos_gemini.sh`) based on 2. **New Document Schema**
+   - [ ] Create parallel functions for Gemini-based processing
+   - [ ] Store both approaches in Firestore for comparison
+   
+   **Rationale for Dual Approach:**
+   - Current approach (BLIP+OpenAI) provides fast, reliable baseline
+   - Gemini offers potentially richer understanding but is experimental
+   - Enables A/B testing and gradual transition
+   - Provides fallback mechanism if Gemini processing fails
+   - Allows comparison of embedding quality and user engagement
+
+2. **New Document Schema**
+   ```typescript
+   interface VideoDocument {
+     // ... existing fields ...
+     geminiDescription?: string;    // Rich video description from Gemini
+     geminiEmbedding?: number[];    // 768-dimensional vector from text-embedding-004
+     geminiMetadata?: {
+       processedAt: Timestamp;
+       processingTime: number;
+       confidence: number;
+       error?: string;
+     };
+   }
+   ```
+
+3. **Implementation Steps**
+   a. **Video Description Generation**
+   - [ ] Create `functions/gemini_processor.js`:
+     ```javascript
+     async function generateVideoDescription(videoUrl) {
+       const client = genai.Client(api_key="GEMINI_API_KEY");
+       return client.models.generate_content({
+         model: 'gemini-2.0-flash-exp',
+         contents: [
+           {
+             video: videoUrl,
+             text: `Analyze this video in detail. Include:
+               - Key actions and movements
+               - Visual composition and style
+               - Objects and their relationships
+               - Temporal aspects (changes over time)
+               - Distinctive features
+               Format as a detailed, structured description.`
+           }
+         ],
+         // Added parameters for consistency
+         temperature: 0.3,
+         maxOutputTokens: 1024,
+         topK: 40,
+         topP: 0.8
+       });
+     }
+     ```
+
+   b. **Text Embedding Generation**
+   - [ ] Add embedding function with caching:
+     ```javascript
+     async function generateGeminiEmbedding(text, videoId) {
+       // Check cache first
+       const doc = await db.collection('embeddings').doc(videoId).get();
+       if (doc.exists && doc.data().timestamp > Date.now() - 7 * 24 * 60 * 60 * 1000) {
+         return doc.data().embedding;
+       }
+
+       const client = genai.Client(api_key="GEMINI_API_KEY");
+       const embedding = await client.models.embed_content({
+         model: 'text-embedding-004',
+         content: text
+       });
+
+       // Cache result
+       await db.collection('embeddings').doc(videoId).set({
+         embedding,
+         timestamp: Date.now()
+       });
+
+       return embedding;
+     }
+     ```
+
+   c. **Similarity Measurement with Fallback**
+   - [ ] Add to `functions/index.js`:
+     ```javascript
+     async function findSimilarVideosGemini(boardVideos, candidates) {
+       try {
+         // Try Gemini embeddings first
+         const boardEmbeddings = await Promise.all(
+           boardVideos.map(v => v.geminiEmbedding ?? v.textEmbedding)
+         );
+         const avgEmbedding = computeAverageEmbedding(boardEmbeddings);
+         
+         return candidates
+           .map(video => ({
+             videoId: video.id,
+             distance: cosineDistance(video.geminiEmbedding ?? video.textEmbedding, avgEmbedding)
+           }))
+           .sort((a, b) => a.distance - b.distance);
+       } catch (error) {
+         console.error('Gemini similarity failed, falling back to text embeddings');
+         // Fallback to existing approach
+         return findSimilarVideos(boardVideos, candidates);
+       }
+     }
+     ```
+
+4. **Processing Strategy**
+   a. **Upload-time Processing**
+   ```javascript
+   async function processVideoWithGemini(videoId) {
+     const startTime = Date.now();
+     try {
+       // Get video URL
+       const video = await db.collection('videos').doc(videoId).get();
+       const videoUrl = video.data().url;
+
+       // Generate description with retry logic
+       const description = await retryWithBackoff(
+         () => generateVideoDescription(videoUrl),
+         3,
+         1000
+       );
+
+       // Generate embedding
+       const embedding = await generateGeminiEmbedding(description, videoId);
+
+       // Update document
+       await db.collection('videos').doc(videoId).update({
+         geminiDescription: description,
+         geminiEmbedding: embedding,
+         geminiMetadata: {
+           processedAt: admin.firestore.Timestamp.now(),
+           processingTime: Date.now() - startTime,
+           confidence: description.safetyRatings.overall
+         }
+       });
+     } catch (error) {
+       // Log error and fall back to existing approach
+       console.error(`Gemini processing failed for ${videoId}:`, error);
+       await db.collection('videos').doc(videoId).update({
+         geminiMetadata: {
+           processedAt: admin.firestore.Timestamp.now(),
+           error: error.message
+         }
+       });
+     }
+   }
+   ```
+
+6. **Validation Metrics**
+   - Description Quality:
+     - Minimum length: 100 tokens
+
+7. **Error Handling**
+   - Retry Strategy:
+     - Max attempts: 3
+     - Backoff: 1s, 2s, 4s
+     - Circuit breaker after 3 failures
+   - Fallback:
+     - Use existing BLIP+OpenAI on failure
+     - Log errors to LangSmith
+     - Alert on high error rates
+
+
+---
+**End of Phase 12**  

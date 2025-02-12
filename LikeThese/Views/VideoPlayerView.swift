@@ -20,56 +20,31 @@ struct VideoPlayerView: View {
                 VideoPlayer(player: viewModel.player)
                     .edgesIgnoringSafeArea(.all)
                 
-                // Swipe gesture overlay
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 50)
-                            .onEnded { value in
-                                let verticalAmount = value.translation.height
-                                let horizontalAmount = value.translation.width
-                                
-                                // Determine if it's a vertical or horizontal swipe
-                                if abs(verticalAmount) > abs(horizontalAmount) {
-                                    if verticalAmount < 0 {  // Swipe up
-                                        Task {
-                                            if isFullscreen {
-                                                await viewModel.loadNextSortedVideo()
-                                            } else {
-                                                await viewModel.loadLeastSimilarVideo()
-                                                withAnimation {
-                                                    isFullscreen = true
-                                                }
-                                            }
-                                        }
-                                    } else {  // Swipe down
-                                        withAnimation {
-                                            isFullscreen = false
-                                            presentationMode.wrappedValue.dismiss()
-                                        }
-                                    }
-                                }
-                            }
-                    )
-                
-                // Loading overlay
+                // Loading indicator
                 if viewModel.isLoading {
-                    LoadingView()
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
                 }
                 
-                // Error overlay
+                // Error alert
                 if let error = viewModel.error {
-                    ErrorView(error: error) {
-                        Task {
-                            await viewModel.retry()
+                    VStack {
+                        Text("Error playing video")
+                            .foregroundColor(.white)
+                            .padding()
+                        Text(error.localizedDescription)
+                            .foregroundColor(.white)
+                            .padding()
+                        Button("Retry") {
+                            Task {
+                                await viewModel.retry()
+                            }
                         }
+                        .padding()
                     }
-                }
-            }
-            .onChange(of: isFullscreen) { newValue in
-                if !newValue {
-                    // Reset sorted queue when exiting fullscreen
-                    VideoManager.shared.resetSortedQueue()
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(10)
                 }
             }
         }

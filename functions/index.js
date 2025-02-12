@@ -46,65 +46,17 @@ let langsmithClient = null;
 async function initializeLangSmith() {
   if (!langsmithClient) {
     try {
-      console.log("🔄 [LangSmith] Starting initialization...");
-      
       const apiKey = langsmithApiKey.value();
       if (!apiKey) {
-        console.error("❌ [LangSmith] API key not found in environment");
         throw new Error("LANGSMITH_API_KEY_SECRET not found");
       }
-
       return apiKey;
     } catch (error) {
-      console.error("❌ [LangSmith] Initialization failed:", {
-        error_name: error.name,
-        error_message: error.message,
-        error_stack: error.stack,
-        error_response: error.response?.data || 'No response data'
-      });
       throw error;
     }
   }
   return langsmithClient;
 }
-
-// Add test endpoint
-exports.testLangSmith = functions.https.onCall({
-  timeoutSeconds: 30,
-  memory: "256MiB",
-  secrets: [langsmithApiKey]
-}, async (data, context) => {
-  console.log("🔄 [LangSmith] Starting test endpoint...");
-  
-  try {
-    const client = await initializeLangSmith();
-    const projects = await client.listProjects();
-    
-    console.log("✅ [LangSmith] Test endpoint successful", {
-      projects_count: projects.length,
-      current_project: process.env.LANGSMITH_PROJECT,
-      environment: process.env.NODE_ENV || 'development'
-    });
-    
-    return {
-      status: "success",
-      projects_count: projects.length,
-      current_project: process.env.LANGSMITH_PROJECT,
-      environment: process.env.NODE_ENV || 'development'
-    };
-  } catch (error) {
-    console.error("❌ [LangSmith] Test endpoint failed:", {
-      error_name: error.name,
-      error_message: error.message,
-      error_stack: error.stack
-    });
-    
-    throw new functions.https.HttpsError('internal', 'LangSmith test failed', {
-      error_message: error.message,
-      error_name: error.name
-    });
-  }
-});
 
 // Batch fetch embeddings from Firestore
 async function batchFetchEmbeddings(videoIds) {

@@ -151,12 +151,47 @@
 151|    - [x] Clarify anywhere references to "thumbnailUrl" now become "frameUrl."  
 152|
 153| ---
-154|
-155| ### 9. Final Notes & Future Considerations
-156| 1. [ ] **Performance**: On-demand frame extraction can be expensive. Consider an offline or one-time migration approach.  
-157| 2. [ ] **Caching**: If your library is large, store embeddings in Firestore after extraction so you don't recalc them every time.  
-158| 3. [ ] **Error Handling**: If ffmpeg fails, revert to old thumbnail or skip the video.  
-159| 4. [ ] **Possible Enhancements**: Add a multi-swipe feature that toggles between your newly sorted queue and a random selection for wildcard variety.  
+159.1| 
+159.2| **Implementation Plan: Textual Approach**  
+159.8|    - [ ] Replace CLIP embeddings with text-based approach:
+159.9|      - [ ] Remove all CLIP-related code from `index.js`
+159.10|      - [ ] Update Firestore schema to replace `clipEmbedding` with `textEmbedding`
+159.12|      - [ ] Update all functions to use text embeddings for similarity matching
+
+159.13|    - [ ] Modify seeding script (`seed_videos.sh`):
+159.14|      - [ ] Add Salesforce BLIP integration for image-to-text
+159.15|      - [ ] Add OpenAI text embedding generation
+159.16|      - [ ] Add timing/logging using LangSmith format
+159.17|      - [ ] Store both caption and embedding in Firestore
+
+159.18|    - [ ] Technical specifications:
+159.19|      - Use Salesforce BLIP model: `salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746`
+159.20|      - Configuration:
+159.21|        ```javascript
+159.22|        {
+159.23|          input: {
+159.24|            task: "image_captioning",
+159.25|            image: "<frame_url>"
+159.26|          }
+159.27|        }
+159.28|        ```
+159.29|      - Expected output format:
+159.30|        ```javascript
+159.31|        {
+159.32|          output: [{ text: "Caption: <generated_caption>" }]
+159.33|        }
+159.34|        ```
+
+159.35|    - [ ] Error handling:
+159.36|      - [ ] Log errors to LangSmith
+159.37|      - [ ] Return error response without fallback
+159.38|      - [ ] Update error messages in ERROR_MESSAGES object
+
+159.39|
+159.40| ### Warnings:
+159.41| 1. This is a breaking change - old CLIP embeddings will be incompatible
+159.42| 2. Need to reprocess all existing videos with new embedding approach
+159.43| 3. May need to update any UI components that depend on similarity scores
 160|
 161| ---
 162|

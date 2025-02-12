@@ -60,30 +60,48 @@ function computeAverageEmbedding(embeddingsArray) {
 
 // Helper function to compute cosine distance
 function cosineDistance(a, b) {
-  if (!a || !b || a.length !== b.length) {
-    throw new Error('Invalid embeddings for cosine distance calculation');
+  if (!a || !b || !Array.isArray(a) || !Array.isArray(b)) {
+    console.log('❌ Invalid embeddings:', { a: !!a, b: !!b, aIsArray: Array.isArray(a), bIsArray: Array.isArray(b) });
+    return 1;
   }
-  
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
+
+  if (a.length !== b.length) {
+    console.log('❌ Embedding length mismatch:', { aLength: a.length, bLength: b.length });
+    return 1;
   }
-  
-  normA = Math.sqrt(normA);
-  normB = Math.sqrt(normB);
-  
+
+  const dotProduct = a.reduce((sum, val, i) => sum + val * b[i], 0);
+  const normA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
+  const normB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
+
   if (normA === 0 || normB === 0) {
-    throw new Error('Zero magnitude vector found');
+    console.log('⚠️ Zero magnitude vector detected:', { normA, normB });
+    return 1;
   }
-  
+
   const similarity = dotProduct / (normA * normB);
-  // Convert similarity to distance (1 - similarity)
-  return 1 - similarity;
+  const distance = 1 - similarity;
+
+  // Add more detailed logging
+  console.log('📐 Cosine calculation details:', {
+    dotProduct: dotProduct.toFixed(6),
+    normA: normA.toFixed(6),
+    normB: normB.toFixed(6),
+    similarity: similarity.toFixed(6),
+    distance: distance.toFixed(6),
+    vectorSample: {
+      a: a.slice(0, 3).map(v => v.toFixed(6)),  // Show first 3 values
+      b: b.slice(0, 3).map(v => v.toFixed(6))
+    }
+  });
+
+  // Sanity check for identical vectors
+  const areIdentical = a.every((val, i) => Math.abs(val - b[i]) < 1e-10);
+  if (areIdentical && distance > 1e-10) {
+    console.warn('⚠️ Warning: Non-zero distance for identical vectors:', distance);
+  }
+
+  return distance;
 }
 
 // Cache for text embeddings
@@ -138,39 +156,48 @@ async function batchFetchEmbeddings(videoIds) {
 
 // Get embeddings with caching
 async function getEmbeddingsWithCache(videos) {
+    console.log("\n🔍 Starting getEmbeddingsWithCache for", videos.length, "videos");
     const results = [];
     const missingEmbeddings = [];
     let replicateInstance = null;
     
     // Check cache first
+    console.log("🔍 Checking cache for", videos.length, "videos");
     for (const video of videos) {
         const cached = textEmbeddingCache.get(video.id);
         if (cached) {
+            console.log("✅ Cache hit for video", video.id);
             results.push({ videoId: video.id, embedding: cached, source: 'cache' });
         } else {
+            console.log("❌ Cache miss for video", video.id);
             missingEmbeddings.push(video);
         }
     }
     
     if (missingEmbeddings.length > 0) {
+        console.log("\n🔄 Processing", missingEmbeddings.length, "videos with missing embeddings");
         // Batch fetch from Firestore
         const videoIds = missingEmbeddings.map(v => v.id);
+        console.log("🔍 Attempting Firestore batch fetch for", videoIds.length, "videos");
         const firestoreEmbeddings = await batchFetchEmbeddings(videoIds);
         
         // Process missing embeddings
         for (const video of missingEmbeddings) {
             const embedding = firestoreEmbeddings.get(video.id);
             if (embedding) {
+                console.log("✅ Found embedding in Firestore for video", video.id);
                 results.push({ videoId: video.id, embedding, source: 'firestore' });
             } else {
+                console.log("\n🔄 Need to generate new embedding for video", video.id);
                 // Initialize Replicate only when we need it
                 if (!replicateInstance) {
+                    console.log("🔄 Initializing Replicate for caption generation");
                     replicateInstance = await initializeReplicate();
                 }
-                // Get caption using frameUrl instead of thumbnailUrl
+                
                 const frameUrl = video.frameUrl;
                 if (!frameUrl) {
-                    console.warn(`⚠️ No frameUrl found for video ${video.id}, extracting frame...`);
+                    console.log("⚠️ No frameUrl found for video", video.id, ", extracting frame...");
                     const { frameUrl: newFrameUrl } = await exports.extractVideoFrame({
                         videoUrl: video.url,
                         videoId: video.id
@@ -308,7 +335,10 @@ function validateInputUrls(boardVideos, candidateVideos) {
 
 // Generate caption using BLIP
 async function generateCaption(imageUrl, replicateInstance = null) {
+    console.log("\n🔄 Starting caption generation for image URL:", imageUrl);
+    
     if (!isValidFirebaseStorageUrl(imageUrl)) {
+        console.error("❌ Invalid image URL for caption generation:", imageUrl);
         throw new functions.https.HttpsError(
             'invalid-argument',
             `Invalid Firebase Storage URL: ${imageUrl}`
@@ -318,12 +348,12 @@ async function generateCaption(imageUrl, replicateInstance = null) {
     let lastError;
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
-            // Get a fresh Replicate instance only if not provided
             if (!replicateInstance) {
+                console.log("🔄 No Replicate instance provided, initializing new one");
                 replicateInstance = await initializeReplicate();
             }
             
-            console.log(`🔄 Generating caption for ${imageUrl} (attempt ${attempt + 1})`);
+            console.log(`🔄 Calling BLIP model for caption (attempt ${attempt + 1})`);
             const output = await replicateInstance.run(
                 "salesforce/blip:2e1dddc8621f72155f24cf2e0adbde548458d3cab9f00c0139eea840d0ac4746",
                 {
@@ -333,21 +363,22 @@ async function generateCaption(imageUrl, replicateInstance = null) {
                     }
                 }
             );
-            console.log("✅ Successfully generated caption");
-            return output[0].text.replace("Caption: ", "");
+            
+            const caption = output[0].text.replace("Caption: ", "");
+            console.log("✅ Successfully generated caption:", caption);
+            return caption;
+            
         } catch (error) {
             lastError = error;
-            console.error(`❌ Caption generation error (attempt ${attempt + 1}):`, {
+            console.error(`❌ BLIP caption generation error (attempt ${attempt + 1}):`, {
                 name: error.name,
                 message: error.message,
-                response: error.response?.data || 'No response data',
-                stack: error.stack
+                response: error.response?.data || 'No response data'
             });
             
             if (attempt === 0) {
-                console.warn(`Retrying caption generation for ${imageUrl} after error`);
+                console.log("🔄 Retrying caption generation after error");
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                // Reset the Replicate instance on retry
                 replicateInstance = null;
             }
         }
@@ -357,7 +388,10 @@ async function generateCaption(imageUrl, replicateInstance = null) {
 
 // Generate text embedding using OpenAI
 async function generateTextEmbedding(text) {
+    console.log("\n🔄 Starting text embedding generation for text:", text);
+    
     try {
+        console.log("🔄 Calling OpenAI embeddings API");
         const response = await axios.post(
             'https://api.openai.com/v1/embeddings',
             {
@@ -372,9 +406,14 @@ async function generateTextEmbedding(text) {
             }
         );
         
+        console.log("✅ Successfully generated text embedding");
         return response.data.data[0].embedding;
     } catch (error) {
-        console.error('❌ Failed to generate text embedding:', error);
+        console.error('❌ OpenAI text embedding error:', {
+            name: error.name,
+            message: error.message,
+            response: error.response?.data || 'No response data'
+        });
         throw new functions.https.HttpsError('internal', ERROR_MESSAGES.EMBEDDING, error);
     }
 }
@@ -406,9 +445,20 @@ exports.findLeastSimilarVideo = functions.https.onCall({
 
     // Extract video data and validate URLs
     const { boardVideos, candidateVideos } = request.data;
-    totalImagesCount = boardVideos.length + candidateVideos.length;
     
-    validateInputUrls(boardVideos, candidateVideos);
+    // Create a Set of board video IDs for efficient lookup
+    const boardVideoIds = new Set(boardVideos.map(v => v.id));
+    
+    // Filter candidates to exclude any videos that are on the board
+    const filteredCandidates = candidateVideos.filter(video => !boardVideoIds.has(video.id));
+    
+    console.log("🔍 Board videos:", boardVideos.map(v => v.id));
+    console.log("🔍 Filtered candidates:", filteredCandidates.map(v => v.id));
+    
+    // Continue with the rest of the function using filteredCandidates instead of candidateVideos
+    totalImagesCount = boardVideos.length + filteredCandidates.length;
+    
+    validateInputUrls(boardVideos, filteredCandidates);
 
     // Get board embeddings
     const boardEmbeddingsStart = Date.now();
@@ -422,19 +472,33 @@ exports.findLeastSimilarVideo = functions.https.onCall({
 
     // Get candidate embeddings
     const candidateEmbeddingsStart = Date.now();
-    const candidateEmbeddingsResults = await getEmbeddingsWithCache(candidateVideos);
+    const candidateEmbeddingsResults = await getEmbeddingsWithCache(filteredCandidates);
     const candidateEmbeddingsTime = Date.now() - candidateEmbeddingsStart;
     computedEmbeddingsCount += candidateEmbeddingsResults.filter(r => r.source === 'computed' || r.source === 'computed_new').length;
     totalEmbeddingTime += candidateEmbeddingsTime;
 
     // Sort candidates
     const sortedCandidates = candidateEmbeddingsResults.map(candidate => {
+      console.log("\n📊 Computing distance for video:", candidate.videoId);
+      console.log("📐 Board average embedding length:", boardAverageEmbedding.length);
+      console.log("📐 Candidate embedding length:", candidate.embedding.length);
+      
       const distance = cosineDistance(candidate.embedding, boardAverageEmbedding);
+      console.log("📏 Computed distance:", distance);
+      
       return {
         videoId: candidate.videoId,
         distance
       };
-    }).sort((a, b) => a.distance - b.distance);
+    }).sort((a, b) => {
+      console.log(`🔄 Comparing distances: ${a.videoId}(${a.distance}) vs ${b.videoId}(${b.distance})`);
+      return a.distance - b.distance;
+    });
+
+    console.log("\n📊 Final sorted order:");
+    sortedCandidates.forEach((candidate, index) => {
+      console.log(`${index + 1}. Video ${candidate.videoId}: distance ${candidate.distance}`);
+    });
 
     // Generate poster if needed
     let posterImageUrl = null;

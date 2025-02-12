@@ -985,6 +985,24 @@ class VideoManager: NSObject, ObservableObject {
     
     // Update findLeastSimilarVideo to store sorted queue
     func findLeastSimilarVideo(for boardVideos: [LikeTheseVideo], excluding: [String] = []) async throws -> LikeTheseVideo {
+        // Add rate limiting
+        if let lastFetch = lastFetchTime, 
+           Date().timeIntervalSince(lastFetch) < minimumFetchInterval {
+            print("⏱️ Rate limit: Using cached results")
+            // Return from cache if available
+            if !sortedCandidates.isEmpty && nextVideoIndex < sortedCandidates.count {
+                let nextCandidate = sortedCandidates[nextVideoIndex]
+                if let video = videos.first(where: { $0.id == nextCandidate.videoId }) {
+                    print("✅ Using cached video: \(video.id) at index \(nextVideoIndex)")
+                    nextVideoIndex += 1
+                    return video
+                }
+            }
+        }
+        
+        lastFetchTime = Date()
+        print("🔄 Rate limit passed, fetching new results")
+        
         let candidateVideos = videos.filter { video in
             !boardVideos.contains { $0.id == video.id } && 
             !excluding.contains(video.id)
@@ -1058,4 +1076,7 @@ class VideoManager: NSObject, ObservableObject {
         sortedCandidates = []
         nextVideoIndex = 0
     }
+    
+    private var lastFetchTime: Date?
+    private let minimumFetchInterval: TimeInterval = 2.0 // 2 seconds
 } 

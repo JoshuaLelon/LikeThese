@@ -1080,18 +1080,23 @@ class VideoManager: NSObject, ObservableObject {
     private var lastFetchTime: Date?
     private let minimumFetchInterval: TimeInterval = 2.0 // 2 seconds
     
-    private var thumbnailLoadFailures: Set<String> = []
+    private var thumbnailLoadFailures = Set<String>()
     private var isRefreshingUrls = false
+    private let refreshSemaphore = DispatchSemaphore(value: 1)
     
     // Add function to handle thumbnail load failure
     func handleThumbnailLoadFailure(for videoId: String) async {
-        guard !isRefreshingUrls else { return }
+        // Use semaphore to prevent concurrent refreshes
+        guard refreshSemaphore.wait(timeout: .now() + 1.0) == .success else {
+            print("⚠️ Skipping URL refresh - another refresh in progress")
+            return
+        }
+        defer { refreshSemaphore.signal() }
         
         // Only try to refresh URLs if this is the first failure for this video
         if !thumbnailLoadFailures.contains(videoId) {
             thumbnailLoadFailures.insert(videoId)
             
-            isRefreshingUrls = true
             do {
                 print("🔄 Refreshing URLs due to thumbnail load failure")
                 try await FirestoreService.shared.refreshVideoUrls()
@@ -1099,7 +1104,6 @@ class VideoManager: NSObject, ObservableObject {
             } catch {
                 print("❌ URL refresh failed:", error.localizedDescription)
             }
-            isRefreshingUrls = false
         }
     }
     

@@ -99,10 +99,10 @@ async function getSignedUrl(filePath) {
     try {
         console.log(`\n🔑 Getting signed URL for: ${filePath}`);
         const file = bucket.file(filePath);
-        // Get a signed URL that expires in 7 days
+        // Get a signed URL that expires in 14 days
         const [url] = await file.getSignedUrl({
             action: 'read',
-            expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+            expires: Date.now() + 14 * 24 * 60 * 60 * 1000, // 14 days
         });
         console.log(`✅ Successfully generated signed URL for ${filePath}`);
         return url;

@@ -314,27 +314,12 @@ function isValidFirebaseStorageUrl(url) {
 
         const urlObj = new URL(url);
         
-        // Accept any Google Storage, Firebase Storage, or googleapis URL
-        const validHosts = [
-            'firebasestorage.googleapis.com',
-            'storage.googleapis.com',
-            'storage.cloud.google.com'
-        ];
+        // Accept Firebase Storage URLs
+        const isValidHost = urlObj.hostname === 'firebasestorage.googleapis.com';
         
-        const isValidHost = validHosts.some(host => urlObj.hostname.includes(host));
-        
-        // Accept any path that includes our content or alt=media
-        const validPathSegments = [
-            '/videos/',
-            '/thumbnails/',
-            '/frames/',
-            '/o/videos/',
-            '/o/thumbnails/',
-            '/o/frames/',
-            'alt=media'
-        ];
-        
-        const isValidPath = validPathSegments.some(segment => url.includes(segment));
+        // Check for our bucket and valid paths
+        const isValidPath = url.includes('/b/likethese-fc23d.firebasestorage.app/o/') && 
+            (url.includes('/thumbnails%2F') || url.includes('/frames%2F') || url.includes('/videos%2F'));
         
         const result = isValidHost && isValidPath;
         console.log(`🔍 URL Validation for ${url.substring(0, 50)}...:\n  Host valid: ${isValidHost}\n  Path valid: ${isValidPath}\n  Result: ${result}`);
@@ -353,7 +338,7 @@ async function getSignedUrl(bucket, filePath) {
     const [url] = await file.getSignedUrl({
       version: 'v4',
       action: 'read',
-      expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+      expires: Date.now() + 14 * 24 * 60 * 60 * 1000, // 14 days
     });
     return url;
   } catch (error) {
@@ -450,24 +435,54 @@ function validateInputUrls(boardVideos, candidateVideos) {
   console.log("🔍 Validating this many board videos:", boardVideos.length);
   console.log("🔍 Validating this many candidate videos:", candidateVideos.length);
   
-  const invalidBoardUrls = boardVideos.filter(
-    video => !isValidFirebaseStorageUrl(video.thumbnailUrl)
-  );
-  const invalidCandidateUrls = candidateVideos.filter(
-    video => !isValidFirebaseStorageUrl(video.thumbnailUrl)
-  );
+  const invalidBoardUrls = boardVideos.filter(video => {
+    const frameUrl = video.frameUrl || video.thumbnailUrl;
+    const isValid = isValidFirebaseStorageUrl(frameUrl);
+    if (!isValid) {
+      console.error("❌ Invalid board video URL:", {
+        videoId: video.id,
+        frameUrl: frameUrl?.substring(0, 100),
+        hasFrameUrl: !!video.frameUrl,
+        hasThumbnailUrl: !!video.thumbnailUrl
+      });
+    }
+    return !isValid;
+  });
+
+  const invalidCandidateUrls = candidateVideos.filter(video => {
+    const frameUrl = video.frameUrl || video.thumbnailUrl;
+    const isValid = isValidFirebaseStorageUrl(frameUrl);
+    if (!isValid) {
+      console.error("❌ Invalid candidate video URL:", {
+        videoId: video.id,
+        frameUrl: frameUrl?.substring(0, 100),
+        hasFrameUrl: !!video.frameUrl,
+        hasThumbnailUrl: !!video.thumbnailUrl
+      });
+    }
+    return !isValid;
+  });
 
   if (invalidBoardUrls.length > 0 || invalidCandidateUrls.length > 0) {
-    console.error("❌ Invalid URLs found:");
-    console.error("Board URLs:", invalidBoardUrls);
-    console.error("Candidate URLs:", invalidCandidateUrls);
+    console.error("❌ Invalid URLs found:", {
+      invalidBoardCount: invalidBoardUrls.length,
+      invalidCandidateCount: invalidCandidateUrls.length,
+      sampleBoardUrl: invalidBoardUrls[0]?.frameUrl || invalidBoardUrls[0]?.thumbnailUrl,
+      sampleCandidateUrl: invalidCandidateUrls[0]?.frameUrl || invalidCandidateUrls[0]?.thumbnailUrl
+    });
     
     throw new functions.https.HttpsError(
       'invalid-argument',
       'Invalid Firebase Storage URLs provided',
       {
-        invalidBoardUrls: invalidBoardUrls.map(v => v.thumbnailUrl),
-        invalidCandidateUrls: invalidCandidateUrls.map(v => v.thumbnailUrl)
+        invalidBoardUrls: invalidBoardUrls.map(v => ({
+          id: v.id,
+          url: v.frameUrl || v.thumbnailUrl
+        })),
+        invalidCandidateUrls: invalidCandidateUrls.map(v => ({
+          id: v.id,
+          url: v.frameUrl || v.thumbnailUrl
+        }))
       }
     );
   }
@@ -594,18 +609,26 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     }
     
     // Validate URLs in both arrays
-    const invalidBoardUrls = boardVideos.filter(v => !isValidFirebaseStorageUrl(v.videoUrl));
-    const invalidCandidateUrls = candidateVideos.filter(v => !isValidFirebaseStorageUrl(v.videoUrl));
+    const invalidBoardUrls = boardVideos.filter(v => {
+        const frameUrl = v.frameUrl || v.thumbnailUrl;
+        return !frameUrl || !isValidFirebaseStorageUrl(frameUrl);
+    });
+    const invalidCandidateUrls = candidateVideos.filter(v => {
+        const frameUrl = v.frameUrl || v.thumbnailUrl;
+        return !frameUrl || !isValidFirebaseStorageUrl(frameUrl);
+    });
     
     if (invalidBoardUrls.length > 0 || invalidCandidateUrls.length > 0) {
         console.error(`❌ Invalid URLs found:\nBoard Videos: ${invalidBoardUrls.length}\nCandidate Videos: ${invalidCandidateUrls.length}`);
         
         // Log a sample of invalid URLs
         if (invalidBoardUrls.length > 0) {
-            console.error('Sample invalid board URL:', invalidBoardUrls[0].videoUrl?.substring(0, 100));
+            const sampleUrl = invalidBoardUrls[0].frameUrl || invalidBoardUrls[0].thumbnailUrl;
+            console.error('Sample invalid board URL:', sampleUrl?.substring(0, 100));
         }
         if (invalidCandidateUrls.length > 0) {
-            console.error('Sample invalid candidate URL:', invalidCandidateUrls[0].videoUrl?.substring(0, 100));
+            const sampleUrl = invalidCandidateUrls[0].frameUrl || invalidCandidateUrls[0].thumbnailUrl;
+            console.error('Sample invalid candidate URL:', sampleUrl?.substring(0, 100));
         }
         
         throw new Error(`Invalid Firebase Storage URLs: ${invalidBoardUrls.length} board videos and ${invalidCandidateUrls.length} candidate videos`);
@@ -788,10 +811,10 @@ async function uploadFrameToStorage(localPath, videoId) {
       },
     });
     
-    // Get signed URL with 7-day expiration
+    // Get signed URL with 14-day expiration
     const [file] = await bucket.file(destination).getSignedUrl({
       action: 'read',
-      expires: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
+      expires: Date.now() + 14 * 24 * 60 * 60 * 1000 // 14 days
     });
     
     console.log('✅ Frame uploaded successfully');

@@ -1079,4 +1079,44 @@ class VideoManager: NSObject, ObservableObject {
     
     private var lastFetchTime: Date?
     private let minimumFetchInterval: TimeInterval = 2.0 // 2 seconds
+    
+    private var thumbnailLoadFailures: Set<String> = []
+    private var isRefreshingUrls = false
+    
+    // Add function to handle thumbnail load failure
+    func handleThumbnailLoadFailure(for videoId: String) async {
+        guard !isRefreshingUrls else { return }
+        
+        // Only try to refresh URLs if this is the first failure for this video
+        if !thumbnailLoadFailures.contains(videoId) {
+            thumbnailLoadFailures.insert(videoId)
+            
+            isRefreshingUrls = true
+            do {
+                print("🔄 Refreshing URLs due to thumbnail load failure")
+                try await FirestoreService.shared.refreshVideoUrls()
+                thumbnailLoadFailures.removeAll()
+            } catch {
+                print("❌ URL refresh failed:", error.localizedDescription)
+            }
+            isRefreshingUrls = false
+        }
+    }
+    
+    // Update video loading to handle thumbnail failures
+    func loadVideo(at index: Int) async throws {
+        guard let video = videos[safe: index] else {
+            print("❌ VIDEO: Invalid index \(index)")
+            throw VideoError.videoNotFound
+        }
+        
+        print("🔄 Loading video at index \(index): \(video.id)")
+        
+        // If thumbnail loading previously failed for this video, try refreshing URLs first
+        if thumbnailLoadFailures.contains(video.id) {
+            try await handleThumbnailLoadFailure(for: video.id)
+        }
+        
+        // Rest of your existing video loading code...
+    }
 } 

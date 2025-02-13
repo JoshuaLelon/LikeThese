@@ -5,8 +5,20 @@ rules_version = '2';
 //    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
 service firebase.storage {
   match /b/{bucket}/o {
+    match /videos/{videoId} {
+      allow read: if true;  // Allow public read access to videos
+      allow write: if request.auth != null;  // Require authentication for writes
+    }
+    match /thumbnails/{thumbnailId} {
+      allow read: if true;  // Allow public read access to thumbnails
+      allow write: if request.auth != null;  // Require authentication for writes
+    }
+    match /frames/{frameId} {
+      allow read: if true;  // Allow public read access to frames
+      allow write: if request.auth != null;  // Require authentication for writes
+    }
     match /{allPaths=**} {
-      allow read, write: if true;  // Test mode - DO NOT USE IN PRODUCTION
+      allow read, write: if request.auth != null;  // Require authentication for all other paths
     }
   }
 }

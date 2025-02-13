@@ -288,6 +288,50 @@ struct InspirationsGridView: View {
                     LoadingView(message: "Failed to load", isError: true)
                         .onAppear {
                             print("❌ THUMBNAIL: Failed to load for video \(video.id)")
+                            Task {
+                                do {
+                                    // Try up to 3 times with exponential backoff
+                                    for attempt in 0..<3 {
+                                        do {
+                                            print("🔄 Attempt \(attempt + 1) to refresh thumbnail for video \(video.id)")
+                                            
+                                            // First try to refresh all URLs
+                                            try await FirestoreService.shared.refreshVideoUrls()
+                                            
+                                            // Add exponential backoff delay
+                                            let delay = Double(pow(2, Double(attempt)))
+                                            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                                            
+                                            // Then handle the specific thumbnail failure
+                                            try await FirestoreService.shared.handleThumbnailLoadFailure(for: video.id)
+                                            
+                                            // Add a small delay before updating the UI
+                                            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                                            
+                                            // Get the updated video with fresh URLs
+                                            if let index = gridVideos.firstIndex(where: { $0.id == video.id }) {
+                                                let updatedVideo = try await FirestoreService.shared.getUpdatedVideo(for: video.id)
+                                                
+                                                // Update on main thread
+                                                await MainActor.run {
+                                                    gridVideos[index] = updatedVideo
+                                                }
+                                                
+                                                // If successful, break the retry loop
+                                                print("✅ Successfully refreshed thumbnail for video \(video.id) on attempt \(attempt + 1)")
+                                                return
+                                            }
+                                        } catch {
+                                            print("❌ Attempt \(attempt + 1) failed for video \(video.id): \(error.localizedDescription)")
+                                            if attempt == 2 {
+                                                throw error // Re-throw on last attempt
+                                            }
+                                        }
+                                    }
+                                } catch {
+                                    print("❌ All attempts failed to handle thumbnail load failure for video \(video.id): \(error.localizedDescription)")
+                                }
+                            }
                         }
                 @unknown default:
                     LoadingView(message: "Loading...")

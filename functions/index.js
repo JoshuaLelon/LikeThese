@@ -1,5 +1,6 @@
 const { defineSecret } = require('firebase-functions/params');
 const functions = require("firebase-functions/v2");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const Replicate = require("replicate");
 const axios = require("axios");
@@ -299,29 +300,150 @@ async function initializeReplicate() {
 
 // Validate Firebase Storage URL
 function isValidFirebaseStorageUrl(url) {
+    try {
+        if (!url) {
+            console.error("❌ URL validation error: URL is null or undefined");
+            return false;
+        }
+
+        // Handle both signed and unsigned URLs
+        if (url.includes('?')) {
+            // For signed URLs, validate before the query parameters
+            url = url.split('?')[0];
+        }
+
+        const urlObj = new URL(url);
+        
+        // Accept any Google Storage, Firebase Storage, or googleapis URL
+        const validHosts = [
+            'firebasestorage.googleapis.com',
+            'storage.googleapis.com',
+            'storage.cloud.google.com'
+        ];
+        
+        const isValidHost = validHosts.some(host => urlObj.hostname.includes(host));
+        
+        // Accept any path that includes our content or alt=media
+        const validPathSegments = [
+            '/videos/',
+            '/thumbnails/',
+            '/frames/',
+            '/o/videos/',
+            '/o/thumbnails/',
+            '/o/frames/',
+            'alt=media'
+        ];
+        
+        const isValidPath = validPathSegments.some(segment => url.includes(segment));
+        
+        const result = isValidHost && isValidPath;
+        console.log(`🔍 URL Validation for ${url.substring(0, 50)}...:\n  Host valid: ${isValidHost}\n  Path valid: ${isValidPath}\n  Result: ${result}`);
+        
+        return result;
+    } catch (e) {
+        console.error("❌ URL validation error:", e.message, "for URL:", url?.substring(0, 50));
+        return false;
+    }
+}
+
+// Get signed URL with proper expiration
+async function getSignedUrl(bucket, filePath) {
   try {
-    // console.log("🔍 Validating URL:", url);
-    const urlObj = new URL(url);
-    // console.log("🏠 Hostname:", urlObj.hostname);
-    
-    // Accept any Google Storage or Firebase Storage URL
-    const isValidHost = urlObj.hostname.includes('firebasestorage.googleapis.com') || 
-                       urlObj.hostname.includes('storage.googleapis.com');
-    
-    // Accept any path that includes our content
-    const isValidPath = url.includes('/videos/') || 
-                       url.includes('/thumbnails/') ||
-                       url.includes('/o/videos/') || 
-                       url.includes('/o/thumbnails/');
-    
-    const isValid = isValidHost && isValidPath;
-    // console.log("✅ URL validation result:", isValid);
-    return isValid;
-  } catch (e) {
-    console.error("❌ URL validation error:", e);
-    return false;
+    const file = bucket.file(filePath);
+    const [url] = await file.getSignedUrl({
+      version: 'v4',
+      action: 'read',
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
+    return url;
+  } catch (error) {
+    console.error(`Failed to get signed URL for ${filePath}:`, error);
+    throw error;
   }
 }
+
+// Update video document with signed URLs
+async function updateVideoWithSignedUrls(videoId) {
+  const bucket = admin.storage().bucket();
+  const videoRef = admin.firestore().collection('videos').doc(videoId);
+  const doc = await videoRef.get();
+  
+  if (!doc.exists) {
+    throw new Error(`Video document ${videoId} not found`);
+  }
+  
+  const data = doc.data();
+  const videoPath = data.videoPath || `videos/${videoId}.mp4`;
+  const thumbnailPath = data.thumbnailPath || `thumbnails/${videoId}.jpg`;
+  const framePath = data.framePath || `frames/${videoId}.jpg`;
+  
+  const [signedVideoUrl, signedThumbnailUrl, signedFrameUrl] = await Promise.all([
+    getSignedUrl(bucket, videoPath),
+    getSignedUrl(bucket, thumbnailPath),
+    data.framePath ? getSignedUrl(bucket, framePath) : null
+  ]);
+  
+  const updateData = {
+    signedVideoUrl,
+    signedThumbnailUrl,
+    lastUrlUpdate: admin.firestore.FieldValue.serverTimestamp()
+  };
+
+  if (signedFrameUrl) {
+    updateData.signedFrameUrl = signedFrameUrl;
+  }
+  
+  await videoRef.update(updateData);
+  
+  return { signedVideoUrl, signedThumbnailUrl, signedFrameUrl };
+}
+
+// Function to refresh signed URLs
+exports.refreshSignedUrls = onSchedule({
+  schedule: "every 24 hours",
+  timeZone: "UTC",
+  memory: "1GiB",
+  timeoutSeconds: 540,
+  invoker: "public"
+}, async (event) => {
+  console.log("🔄 Starting URL refresh job");
+  const videosRef = admin.firestore().collection('videos');
+  const snapshot = await videosRef.get();
+  
+  const updates = snapshot.docs.map(doc => 
+    updateVideoWithSignedUrls(doc.id)
+      .catch(error => {
+        console.error(`Failed to update URLs for video ${doc.id}:`, error);
+        return null;
+      })
+  );
+  
+  await Promise.all(updates);
+  console.log(`✅ Updated signed URLs for ${snapshot.size} videos`);
+});
+
+// Add a manual URL refresh endpoint
+exports.manualUrlRefresh = functions.https.onCall({
+  timeoutSeconds: 540,
+  memory: "1GiB",
+}, async (data, context) => {
+  console.log("🔄 Starting manual URL refresh");
+  const videosRef = admin.firestore().collection('videos');
+  const snapshot = await videosRef.get();
+  
+  const updates = snapshot.docs.map(doc => 
+    updateVideoWithSignedUrls(doc.id)
+      .catch(error => {
+        console.error(`Failed to update URLs for video ${doc.id}:`, error);
+        return null;
+      })
+  );
+  
+  await Promise.all(updates);
+  console.log(`✅ Updated signed URLs for ${snapshot.size} videos`);
+  
+  return { message: `Updated URLs for ${snapshot.size} videos` };
+});
 
 // Validate input URLs
 function validateInputUrls(boardVideos, candidateVideos) {
@@ -464,6 +586,33 @@ exports.findLeastSimilarVideo = functions.https.onCall({
     // Extract video data and validate URLs
     const { boardVideos, candidateVideos } = request.data;
     
+    console.log(`📥 Validating URLs for ${boardVideos?.length || 0} board videos and ${candidateVideos?.length || 0} candidates`);
+    
+    // Validate input arrays
+    if (!Array.isArray(boardVideos) || !Array.isArray(candidateVideos)) {
+        throw new Error('Invalid input: boardVideos and candidateVideos must be arrays');
+    }
+    
+    // Validate URLs in both arrays
+    const invalidBoardUrls = boardVideos.filter(v => !isValidFirebaseStorageUrl(v.videoUrl));
+    const invalidCandidateUrls = candidateVideos.filter(v => !isValidFirebaseStorageUrl(v.videoUrl));
+    
+    if (invalidBoardUrls.length > 0 || invalidCandidateUrls.length > 0) {
+        console.error(`❌ Invalid URLs found:\nBoard Videos: ${invalidBoardUrls.length}\nCandidate Videos: ${invalidCandidateUrls.length}`);
+        
+        // Log a sample of invalid URLs
+        if (invalidBoardUrls.length > 0) {
+            console.error('Sample invalid board URL:', invalidBoardUrls[0].videoUrl?.substring(0, 100));
+        }
+        if (invalidCandidateUrls.length > 0) {
+            console.error('Sample invalid candidate URL:', invalidCandidateUrls[0].videoUrl?.substring(0, 100));
+        }
+        
+        throw new Error(`Invalid Firebase Storage URLs: ${invalidBoardUrls.length} board videos and ${invalidCandidateUrls.length} candidate videos`);
+    }
+    
+    console.log('✅ All URLs validated successfully');
+
     // Create a Set of board video IDs for efficient lookup
     const boardVideoIds = new Set(boardVideos.map(v => v.id));
     
@@ -639,10 +788,10 @@ async function uploadFrameToStorage(localPath, videoId) {
       },
     });
     
-    // Get the public URL
+    // Get signed URL with 7-day expiration
     const [file] = await bucket.file(destination).getSignedUrl({
       action: 'read',
-      expires: '03-01-2500', // Far future expiration
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
     });
     
     console.log('✅ Frame uploaded successfully');

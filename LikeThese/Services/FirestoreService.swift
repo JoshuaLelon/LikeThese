@@ -3,6 +3,7 @@ import FirebaseFirestore
 import FirebaseStorage
 import FirebaseAuth
 import Network
+import FirebaseFunctions
 
 enum FirestoreError: Error {
     case invalidVideoURL(String)
@@ -37,6 +38,7 @@ class FirestoreService: ObservableObject {
     static let shared = FirestoreService()
     private let db = Firestore.firestore()
     private let storage = Storage.storage()
+    private let functions = Functions.functions()
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
     private let maxRetries = 3
@@ -108,12 +110,45 @@ class FirestoreService: ObservableObject {
         do {
             print("🔄 Getting signed URL for path: \(path)")
             let storageRef = storage.reference(withPath: path)
-            let signedURLString = try await storageRef.downloadURL()
+            
+            // Get a signed URL that expires in 1 hour
+            let signedURLString = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+                storageRef.downloadURL { url, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    guard let url = url else {
+                        continuation.resume(throwing: NSError(domain: "FirestoreService", 
+                                                           code: -1, 
+                                                           userInfo: [NSLocalizedDescriptionKey: "Failed to get download URL"]))
+                        return
+                    }
+                    continuation.resume(returning: url)
+                }
+            }
+            
             print("✅ Successfully got signed URL: \(signedURLString)")
             return signedURLString
         } catch {
             print("❌ Failed to get signed URL for path \(path): \(error.localizedDescription)")
             throw FirestoreError.networkError(error)
+        }
+    }
+    
+    func refreshVideoUrls() async throws {
+        print("🔄 Starting manual URL refresh")
+        do {
+            let result = try await functions.httpsCallable("manualUrlRefresh").call()
+            if let data = result.data as? [String: Any],
+               let message = data["message"] as? String {
+                print("✅ URL refresh complete:", message)
+            }
+            // Refresh local video cache
+            try await fetchVideos()
+        } catch {
+            print("❌ URL refresh failed:", error.localizedDescription)
+            throw error
         }
     }
     
@@ -131,6 +166,20 @@ class FirestoreService: ObservableObject {
                 timestamp: (data["timestamp"] as? Timestamp) ?? Timestamp(date: Date())
             )
             return video
+        }
+        
+        // If signed URLs are not available, try refreshing them first
+        do {
+            try await refreshVideoUrls()
+            // Fetch the updated document
+            let updatedDoc = try await db.collection("videos").document(documentId).getDocument()
+            guard let updatedData = updatedDoc.data() else {
+                throw FirestoreError.invalidVideoData
+            }
+            // Try again with the updated data
+            return try await validateVideoData(updatedData, documentId: documentId)
+        } catch {
+            print("⚠️ URL refresh failed, falling back to path-based URLs")
         }
         
         // Fallback to generating signed URLs from paths
@@ -530,5 +579,45 @@ class FirestoreService: ObservableObject {
         }
         
         return try await validateVideoData(document.data(), documentId: document.documentID)
+    }
+    
+    func handleThumbnailLoadFailure(for videoId: String) async throws {
+        print("🔄 Handling thumbnail load failure for video: \(videoId)")
+        
+        // Get the document
+        let doc = try await db.collection("videos").document(videoId).getDocument()
+        guard let data = doc.data() else {
+            throw FirestoreError.invalidVideoData
+        }
+        
+        // Try to refresh URLs first
+        try await refreshVideoUrls()
+        
+        // If that doesn't work, try to generate new signed URLs from paths
+        if let videoPath = data["videoPath"] as? String,
+           let thumbnailPath = data["thumbnailPath"] as? String {
+            print("🔄 Generating fresh signed URLs for video: \(videoId)")
+            let videoURL = try await getSignedURL(for: videoPath).absoluteString
+            let thumbnailURL = try await getSignedURL(for: thumbnailPath).absoluteString
+            
+            // Update the document with new signed URLs
+            try await doc.reference.updateData([
+                "signedVideoUrl": videoURL,
+                "signedThumbnailUrl": thumbnailURL,
+                "lastUrlUpdate": FieldValue.serverTimestamp()
+            ])
+            
+            print("✅ Updated signed URLs for video: \(videoId)")
+        } else {
+            throw FirestoreError.invalidVideoData
+        }
+    }
+    
+    func getUpdatedVideo(for videoId: String) async throws -> LikeTheseVideo {
+        let doc = try await db.collection("videos").document(videoId).getDocument()
+        guard let data = doc.data() else {
+            throw FirestoreError.invalidVideoData
+        }
+        return try await validateVideoData(data, documentId: videoId)
     }
 } 
